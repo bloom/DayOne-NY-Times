@@ -615,58 +615,69 @@ else
   echo "- Tags to be applied: ${ALL_TAGS[*]}"
 fi
 
-# Build the Day One command
-function build_dayone_cmd() {
-  local use_journal=$1
-  local cmd="dayone2"
-  
-  # Add basic parameters
-  [[ "$use_journal" = true ]] && cmd+=" -j \"$JOURNAL_NAME\""
-  cmd+=" -d \"$DATE\" --all-day"
-  
-  # Add tags if any
-  [[ -n "$TAG_CMD" ]] && cmd+=" $TAG_CMD"
-  
-  # Add attachments if any
-  if [[ ${#PHOTO_ARGS[@]} -gt 0 ]]; then
-    cmd+=" -a"
-    for PHOTO in "${PHOTO_ARGS[@]}"; do
-      cmd+=" \"$PHOTO\""
-    done
-    cmd+=" --"
-  fi
-  
-  # Add entry content
-  cmd+=" new \"$ENTRY_TEXT\""
-  
-  echo "$cmd"
-}
+# Run the dayone2 command directly without using function
+# This avoids any issues with read-only variables
+echo "Running dayone2 command directly..."
 
-# Build commands for both with and without journal
-CMD_WITH_JOURNAL=$(build_dayone_cmd true)
-CMD_WITHOUT_JOURNAL=$(build_dayone_cmd false)
+# Create a temp file for the entry content to avoid quoting issues
+TEMP_ENTRY_FILE=$(mktemp)
 
-# Log the command for debugging
-echo "Command to be executed:"
-echo "$CMD_WITH_JOURNAL"
+# Write the entry content to the temp file
+cat > "$TEMP_ENTRY_FILE" << EOT
+$ENTRY_TEXT
+EOT
 
-# Try with journal first, then fall back to no journal if it fails
-echo "Executing command with specified journal..."
-echo "DEBUG: Command = $CMD_WITH_JOURNAL"
+# Build the arguments for dayone2
+DAYONE_ARGS=()
 
-# Execute the command
-RESULT=$(eval $CMD_WITH_JOURNAL 2>&1)
+# Add journal if specified
+DAYONE_ARGS+=("-j" "$JOURNAL_NAME")
+
+# Add date and all-day flag
+DAYONE_ARGS+=("-d" "$DATE" "--all-day")
+
+# Add tags
+if [[ ${#ALL_TAGS[@]} -gt 0 ]]; then
+  for tag in "${ALL_TAGS[@]}"; do
+    DAYONE_ARGS+=("-t" "$tag")
+  done
+fi
+
+# Add attachments if any
+if [[ ${#PHOTO_ARGS[@]} -gt 0 ]]; then
+  DAYONE_ARGS+=("-a")
+  for photo in "${PHOTO_ARGS[@]}"; do
+    DAYONE_ARGS+=("$photo")
+  done
+  DAYONE_ARGS+=("--")
+fi
+
+# Add "new" command
+DAYONE_ARGS+=("new")
+
+# Show the command for debugging
+echo "DEBUG: Running: dayone2 ${DAYONE_ARGS[*]} < $TEMP_ENTRY_FILE"
+
+# Execute the command with journal
+RESULT=$(dayone2 "${DAYONE_ARGS[@]}" < "$TEMP_ENTRY_FILE" 2>&1)
 COMMAND_STATUS=$?
+
 echo "DEBUG: Command exit status = $COMMAND_STATUS"
 echo "DEBUG: Result = $RESULT"
 
 # Check if there was an error with the journal
 if [[ "$RESULT" == *"Invalid value(s) for option -j, --journal"* ]]; then
   echo "Warning: Journal '$JOURNAL_NAME' not found, saving to default journal instead"
-  echo "DEBUG: Falling back to command = $CMD_WITHOUT_JOURNAL"
-  RESULT=$(eval $CMD_WITHOUT_JOURNAL)
+  
+  # Remove the journal option from the arguments
+  DAYONE_ARGS=("${DAYONE_ARGS[@]:2}")  # Skip the first two arguments (-j "$JOURNAL_NAME")
+  
+  echo "DEBUG: Retrying with: dayone2 ${DAYONE_ARGS[*]} < $TEMP_ENTRY_FILE"
+  RESULT=$(dayone2 "${DAYONE_ARGS[@]}" < "$TEMP_ENTRY_FILE" 2>&1)
   COMMAND_STATUS=$?
+  
   echo "DEBUG: Fallback command exit status = $COMMAND_STATUS"
+  echo "DEBUG: Fallback result = $RESULT"
 fi
 
 # -----------------------------------------------------------------------------
@@ -680,6 +691,7 @@ if [[ $COMMAND_STATUS -eq 0 ]]; then
   echo "DEBUG: UUID extraction result = '$ENTRY_UUID'"
   
   # Clean up temporary files
+  rm -f "$TEMP_ENTRY_FILE"
   rm -rf "$TEMP_DIR"
   
   # Print success message with deep link if available
@@ -694,6 +706,7 @@ else
   echo "ERROR: Command output was: $RESULT"
   
   # Clean up temporary files
+  rm -f "$TEMP_ENTRY_FILE"
   rm -rf "$TEMP_DIR"
   exit $COMMAND_STATUS
 fi
