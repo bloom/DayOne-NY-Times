@@ -29,6 +29,7 @@ function usage() {
   echo "  --pdf            Also attach the PDF file (JPG only by default)"
   echo "  --full-summary   Include comprehensive NYT content analysis"
   echo "  --journal NAME   Specify Day One journal name (default: The New York Times)"
+  echo "  --no-tag         Don't add the default tag \"$DEFAULT_TAG\""
   echo ""
   echo "Environment variables:"
   echo "  NYT_API_KEY      Your New York Times API key (required)"
@@ -38,6 +39,7 @@ function usage() {
   echo "  $script 2024-03-14                            # Get front page for specific date" 
   echo "  $script --pdf 2024-01-01                      # Include PDF attachment"
   echo "  $script --journal \"History\" 2022-09-08        # Save to different journal"
+  echo "  $script --no-tag 2024-02-15                   # Skip adding the default tag"
   
   exit 1
 }
@@ -52,6 +54,8 @@ ATTACH_JPG=true         # JPG attachment is always on by default
 INCLUDE_FULL_SUMMARY=false  # Full content analysis is off by default
 DATE=""                 # Date to fetch (empty = today)
 JOURNAL_NAME="The New York Times"  # Default journal name
+DEFAULT_TAG="The New York Times"  # Default tag (can be disabled)
+ADD_DEFAULT_TAG=true    # Whether to add the default tag
 
 # Process command line arguments
 while (( $# > 0 )); do
@@ -65,6 +69,10 @@ while (( $# > 0 )); do
       ;;
     --full-summary)
       INCLUDE_FULL_SUMMARY=true
+      shift
+      ;;
+    --no-tag)
+      ADD_DEFAULT_TAG=false
       shift
       ;;
     --journal)
@@ -146,6 +154,7 @@ DAY=$(date -j -f "%Y-%m-%d" "$DATE" +%-d)
 FORMATTED_DATE=$(date -j -f "%Y-%m-%d" "$DATE" +"%A, %B %d, %Y")
 FORMATTED_MONTH=$(date -j -f "%Y-%m-%d" "$DATE" +%m)
 FORMATTED_DAY=$(date -j -f "%Y-%m-%d" "$DATE" +%d)
+HEADER_DATE=$(date -j -f "%Y-%m-%d" "$DATE" +"%B %d")
 NYT_ARCHIVE_URL="https://www.nytimes.com/issue/todayspaper/$YEAR/$FORMATTED_MONTH/$FORMATTED_DAY/todays-new-york-times"
 
 # -----------------------------------------------------------------------------
@@ -345,12 +354,12 @@ fi
 # Create entry text with appropriate format
 if [[ "$ATTACH_JPG" = true || "$ATTACH_PDF" = true ]]; then
   # Entry with image placeholder and headline above
-  HEADER="#### 🗞 The New York Times:
+  HEADER="#### The New York Times: $HEADER_DATE
 $FIRST_HEADLINE
 [{photo}]"
 else
   # Entry without image
-  HEADER="#### 🗞 The New York Times:
+  HEADER="#### The New York Times: $HEADER_DATE
 $FIRST_HEADLINE"
 fi
 
@@ -394,6 +403,11 @@ fi
 echo "Using journal: $JOURNAL_NAME"
 
 # Build Day One commands (with and without journal name)
+TAG_CMD=""
+if [[ "$ADD_DEFAULT_TAG" = true ]]; then
+  TAG_CMD="-t \"$DEFAULT_TAG\""
+fi
+
 if [[ ${#PHOTO_ARGS[@]} -gt 0 ]]; then
   # For entries with attachments
   ATTACHMENT_CMD="-a"
@@ -402,14 +416,14 @@ if [[ ${#PHOTO_ARGS[@]} -gt 0 ]]; then
   done
   
   # Command with specified journal
-  CMD_WITH_JOURNAL="dayone2 -j \"$JOURNAL_NAME\" -d \"$DATE\" --all-day -t \"The New York Times\" $ATTACHMENT_CMD -- new \"$ENTRY_TEXT\""
+  CMD_WITH_JOURNAL="dayone2 -j \"$JOURNAL_NAME\" -d \"$DATE\" --all-day $TAG_CMD $ATTACHMENT_CMD -- new \"$ENTRY_TEXT\""
   
   # Command without specifying journal (uses default)
-  CMD_WITHOUT_JOURNAL="dayone2 -d \"$DATE\" --all-day -t \"The New York Times\" $ATTACHMENT_CMD -- new \"$ENTRY_TEXT\""
+  CMD_WITHOUT_JOURNAL="dayone2 -d \"$DATE\" --all-day $TAG_CMD $ATTACHMENT_CMD -- new \"$ENTRY_TEXT\""
 else
   # For entries without attachments
-  CMD_WITH_JOURNAL="dayone2 -j \"$JOURNAL_NAME\" -d \"$DATE\" --all-day -t \"The New York Times\" new \"$ENTRY_TEXT\""
-  CMD_WITHOUT_JOURNAL="dayone2 -d \"$DATE\" --all-day -t \"The New York Times\" new \"$ENTRY_TEXT\""
+  CMD_WITH_JOURNAL="dayone2 -j \"$JOURNAL_NAME\" -d \"$DATE\" --all-day $TAG_CMD new \"$ENTRY_TEXT\""
+  CMD_WITHOUT_JOURNAL="dayone2 -d \"$DATE\" --all-day $TAG_CMD new \"$ENTRY_TEXT\""
 fi
 
 # Try with journal first, then fall back to no journal if it fails
