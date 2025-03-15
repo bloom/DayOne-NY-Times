@@ -9,6 +9,7 @@ A set of Zsh scripts to fetch New York Times front pages and headlines for speci
 - Provides deep links to easily open entries in Day One
 - Includes option to show comprehensive content analysis
 - Supports batch processing of date ranges (days, weeks, months)
+- Links historical events to newspaper dates automatically
 - Configurable journal destination
 
 ## Requirements
@@ -72,6 +73,12 @@ A set of Zsh scripts to fetch New York Times front pages and headlines for speci
 # With multiple options
 ./nyt_to_dayone.zsh --pdf --full-summary --journal "Archives" 2025-03-10
 
+# Use a custom headline (overrides historical events)
+./nyt_to_dayone.zsh --headline "Custom Headline" 2021-01-07
+
+# Add additional tags
+./nyt_to_dayone.zsh --tag "Election" --tag "Politics" 2020-11-04
+
 # Show help
 ./nyt_to_dayone.zsh --help
 ```
@@ -103,8 +110,9 @@ A set of Zsh scripts to fetch New York Times front pages and headlines for speci
 1. **Front Page Retrieval**: Fetches PDFs from the NYT archive at static01.nyt.com
 2. **Image Processing**: Converts PDFs to high-resolution JPGs using macOS tools
 3. **Content Analysis**: Extracts headlines and content from the NYT Archive API
-4. **Day One Integration**: Creates formatted journal entries with attachments
-5. **Deep Linking**: Provides direct links to open entries in Day One
+4. **Historical Integration**: Checks if the date corresponds to a significant historical event
+5. **Day One Integration**: Creates formatted journal entries with attachments and appropriate tags
+6. **Deep Linking**: Provides direct links to open entries in Day One
 
 ## Technical Details
 
@@ -112,12 +120,58 @@ A set of Zsh scripts to fetch New York Times front pages and headlines for speci
 - **Content Extraction**: Parses the NYT Archive API using jq to extract structured data
 - **API Key Management**: Supports both environment variables and local file for API key storage
 - **Date Processing**: Includes robust date handling for ranges and formatted outputs
+- **Historical Events**: Reads from a JSON file to correlate newspaper dates with significant events
 - **Journal Selection**: Allows specifying any Day One journal with fallback to default journal if not found
+- **Tag Management**: Automatically adds appropriate tags based on entry type
 - **Deep Links**: Provides `dayone://view?entryId=UUID` links for direct entry access
+
+## Historical Events
+
+The scripts can automatically integrate historical events with newspaper front pages, creating a more meaningful historical record in Day One.
+
+### How Historical Events Work
+
+1. The `historical-events.json` file contains a list of significant historical events with their dates
+2. When creating an entry, the script checks if the newspaper date corresponds to an event from the previous day
+3. If a match is found, the event is displayed as the top headline above the front page image
+4. All regular headlines are still included below the image
+5. Entries with historical events receive both "The New York Times" and "Historical Event" tags
+
+### Historical Events File Format
+
+```json
+[
+    {"Date": "January 6, 2021", "Event": "Attack on the U.S. Capitol by pro-Trump rioters"},
+    {"Date": "November 8, 2016", "Event": "Donald Trump elected as the 45th U.S. President"}
+]
+```
+
+### Creating Historical Event Entries
+
+```zsh
+# Process all historical events in the JSON file
+./fetch_historical.zsh
+
+# Process only events from 2020 onwards
+./fetch_historical.zsh --start-date 2020-01-01
+
+# Process only specific events
+./fetch_historical.zsh --event "Capitol"
+
+# Show what would be done without creating entries
+./fetch_historical.zsh --dry-run
+
+# Save to a specific journal
+./fetch_historical.zsh --journal "History"
+
+# Show help
+./fetch_historical.zsh --help
+```
 
 ## Notes
 
-- Entries are created with "New York Times" tag
+- Regular entries are created with "The New York Times" tag
+- Historical event entries receive both "The New York Times" and "Historical Event" tags
 - Images are placed in the entry using the Day One `[{photo}]` placeholder
 - Scripts include delays to avoid API rate limiting
 - These scripts use native Zsh features and are optimized for macOS
