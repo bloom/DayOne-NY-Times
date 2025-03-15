@@ -45,7 +45,7 @@ function usage() {
   echo "  $script --no-tag 2024-02-15                   # Skip adding the default tag"
   echo "  $script --tag \"Historical Event\" 2021-01-07   # Add additional tag"
   echo "  $script --headline \"Capitol Riots\" 2021-01-07 # Use custom headline"
-  echo "  $script --bad-pdf 2018-01-10                   # Handle known corrupted PDF"
+  echo "  $script --bad-pdf 2018-01-10                   # Handle known corrupted PDF and add it to the list"
   
   exit 1
 }
@@ -66,47 +66,30 @@ ADDITIONAL_TAGS=()      # Additional tags to add
 CUSTOM_HEADLINE=""      # Custom headline to use instead of NYT first headline
 PDF_CORRUPTED=false     # Whether the PDF is known to be corrupted
 
-# List of dates with known corrupted PDFs (YYYY-MM-DD format)
-CORRUPTED_PDFS=(
-  "2018-01-10"
-  "2018-01-11" 
-  "2018-01-12"
-  "2018-01-13"
-  "2018-01-15"
-  "2018-01-16"
-  "2018-01-17"
-  "2018-01-19"
-  "2018-01-20"
-  "2018-01-22"
-  "2018-01-23"
-  "2018-01-24"
-  "2018-01-25"
-  "2018-01-26"
-  "2018-01-27"
-  "2018-01-30"
-  "2018-01-31"
-  "2018-02-01"
-  "2018-02-02"
-  "2018-02-05"
-  "2018-02-06"
-  "2018-02-07"
-  "2018-02-08"
-  "2018-02-09"
-  "2018-02-10"
-  "2018-02-12"
-  "2018-02-13"
-  "2018-02-14"
-)
+# List of corrupted PDFs is now in nyt_corrupt_pdf_list.json
 
 # Function to check if a date has a corrupted PDF
 function is_corrupted_pdf() {
   local check_date="$1"
-  for bad_date in "${CORRUPTED_PDFS[@]}"; do
-    if [[ "$check_date" == "$bad_date" ]]; then
-      return 0  # True, it is corrupted
+  local json_file="$PWD/nyt_corrupt_pdf_list.json"
+  
+  # Check if the corrupted PDF list file exists
+  if [[ -f "$json_file" ]]; then
+    # Check if jq is available for JSON processing
+    if (( $+commands[jq] )); then
+      # Use jq to check if the date is in the corrupted PDF list
+      if jq -e --arg date "$check_date" 'contains([$date])' "$json_file" > /dev/null; then
+        return 0  # True, it is corrupted
+      fi
+    else
+      echo "Warning: jq not found, cannot check corrupted PDF list"
+      echo "To enable corrupted PDF detection, install jq: brew install jq"
     fi
-  done
-  return 1  # False, it's not in the corrupted list
+  else
+    echo "Warning: Corrupted PDF list file not found: $json_file"
+  fi
+  
+  return 1  # False, it's not in the corrupted list or we couldn't check
 }
 
 # Process command line arguments
@@ -149,10 +132,45 @@ while (( $# > 0 )); do
       ;;
     --bad-pdf)
       # Mark the date as having a corrupted PDF
-      # Note: This is just informational for this run; to permanently add,
-      # the user needs to edit the script
+      if [[ -z "$DATE" && $# -gt 1 && "$2" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+        # If no date was provided yet but the next argument is a date, use it
+        DATE="$2"
+        shift
+      fi
+      
+      if [[ -z "$DATE" ]]; then
+        echo "Error: --bad-pdf requires a date. Please specify a date before or after the --bad-pdf option."
+        usage
+      fi
+      
       echo "Marking $DATE as having a corrupted PDF"
       PDF_CORRUPTED=true
+      
+      # If jq is available, add this date to the corrupted PDF list
+      if (( $+commands[jq] )); then
+        # Path to the corrupted PDF list file
+        local json_file="$PWD/nyt_corrupt_pdf_list.json"
+        
+        if [[ -f "$json_file" ]]; then
+          # Check if date is already in the list
+          if ! jq -e --arg date "$DATE" 'contains([$date])' "$json_file" > /dev/null; then
+            # Add date to the list and save back to file
+            jq --arg date "$DATE" '. + [$date] | sort' "$json_file" > "${json_file}.tmp"
+            mv "${json_file}.tmp" "$json_file"
+            echo "Added $DATE to corrupted PDF list: $json_file"
+          else
+            echo "Note: $DATE is already in the corrupted PDF list"
+          fi
+        else
+          # Create a new list with just this date
+          echo "[$DATE]" > "$json_file"
+          echo "Created new corrupted PDF list: $json_file"
+        fi
+      else
+        echo "Warning: jq not found, cannot update corrupted PDF list"
+        echo "To enable adding dates to the corrupted PDF list, install jq: brew install jq"
+      fi
+      
       shift
       ;;
     --journal)
