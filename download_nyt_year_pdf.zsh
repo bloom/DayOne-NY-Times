@@ -34,11 +34,12 @@ function usage() {
   exit 1
 }
 
-# Create month name from number
+# Month names lookup array (initialize once)
+MONTH_NAMES=("January" "February" "March" "April" "May" "June" "July" "August" "September" "October" "November" "December")
+
+# Get month name directly from lookup array
 function get_month_name() {
-  local month_num=$1
-  local month_names=("January" "February" "March" "April" "May" "June" "July" "August" "September" "October" "November" "December")
-  echo ${month_names[$month_num-1]}
+  echo ${MONTH_NAMES[$1-1]}
 }
 
 # Download a PDF for a specific date
@@ -48,24 +49,21 @@ function download_pdf() {
   local day=$3
   local output_path=$4
   
-  # Format date components for URL
+  # Format date components for URL and filename
   local month_padded=$(printf "%02d" $month)
   local day_padded=$(printf "%02d" $day)
-  
-  # Build URL
-  local url="https://static01.nyt.com/images/$year/$month_padded/$day_padded/nytfrontpage/scan.pdf"
-  
-  # Format date for output - include month name in filename
-  local month_name=$(get_month_name $month)
   local date_format="$year-$month_padded-$day_padded"
+  local output_file="$output_path/NYT_$date_format.pdf"
+  
+  # Build NYT URL
+  local url="https://static01.nyt.com/images/$year/$month_padded/$day_padded/nytfrontpage/scan.pdf"
   
   echo "Downloading front page for $date_format..."
   
-  # Create output filename
-  local output_file="$output_path/NYT_$date_format.pdf"
-  
-  # Download the PDF with user agent to avoid potential restrictions
-  curl -s -o "$output_file" -A "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Safari/605.1.15" "$url"
+  # Download with modern user agent string
+  curl -s -o "$output_file" \
+       -A "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Safari/605.1.15" \
+       "$url"
   
   # Check if download was successful
   if [[ -s "$output_file" ]]; then
@@ -159,11 +157,65 @@ TOTAL_DOWNLOADS=0
 SUCCESSFUL_DOWNLOADS=0
 FAILED_DOWNLOADS=0
 
+# Calculate days in the given month of the given year
+function days_in_month() {
+  local year=$1
+  local month=$2
+  
+  case $month in
+    2) # February
+      [[ $(( year % 400 == 0 || (year % 4 == 0 && year % 100 != 0) )) -eq 1 ]] && echo 29 || echo 28
+      ;;
+    4|6|9|11) # April, June, September, November
+      echo 30
+      ;;
+    *) # January, March, May, July, August, October, December
+      echo 31
+      ;;
+  esac
+}
+
+# Check if a date is in the future
+function is_future_date() {
+  local year=$1
+  local month=$2
+  local day=$3
+  
+  local current_year=$(date +%Y)
+  local current_month=$(date +%-m)
+  local current_day=$(date +%-d)
+  
+  # Compare year first, then month, then day
+  if [[ $year -gt $current_year ]]; then
+    return 0
+  elif [[ $year -eq $current_year && $month -gt $current_month ]]; then
+    return 0
+  elif [[ $year -eq $current_year && $month -eq $current_month && $day -gt $current_day ]]; then
+    return 0
+  fi
+  
+  return 1
+}
+
+# Get current date components (calculate once)
+CURRENT_YEAR=$(date +%Y)
+CURRENT_MONTH=$(date +%-m)
+CURRENT_DAY=$(date +%-d)
+
 # Process each month
 for month in {1..12}; do
-  # Get month name for display purposes only
-  month_name=$(get_month_name $month)
+  # Skip months before July for 2012 (NYT limitation)
+  if [[ $YEAR -eq 2012 && $month -lt 7 ]]; then
+    continue
+  fi
   
+  # Skip future months
+  if [[ $YEAR -gt $CURRENT_YEAR || ($YEAR -eq $CURRENT_YEAR && $month -gt $CURRENT_MONTH) ]]; then
+    continue
+  fi
+  
+  # Get month name and display status
+  month_name=${MONTH_NAMES[$month-1]}
   echo ""
   echo "Processing month: $month_name"
   
@@ -172,60 +224,28 @@ for month in {1..12}; do
   month_total_start=$TOTAL_DOWNLOADS
   
   # Determine number of days in the month
-  case $month in
-    2) # February
-      if (( YEAR % 400 == 0 || (YEAR % 4 == 0 && YEAR % 100 != 0) )); then
-        days_in_month=29  # Leap year
-      else
-        days_in_month=28
-      fi
-      ;;
-    4|6|9|11) # April, June, September, November
-      days_in_month=30
-      ;;
-    *) # January, March, May, July, August, October, December
-      days_in_month=31
-      ;;
-  esac
-  
-  # Skip future months in the current year
-  current_year=$(date +%Y)
-  current_month=$(date +%-m)
-  
-  if [[ $YEAR -eq $current_year && $month -gt $current_month ]]; then
-    echo "Skipping future month: $month_name $YEAR"
-    continue
-  fi
+  days_in_month=$(days_in_month $YEAR $month)
   
   # Process each day in the month
   for day in $(seq 1 $days_in_month); do
-    # Skip future days in the current month/year
-    if [[ $YEAR -eq $current_year && $month -eq $current_month ]]; then
-      current_day=$(date +%-d)
-      if [[ $day -gt $current_day ]]; then
-        echo "Skipping future date: $YEAR-$month-$day"
-        continue
-      fi
+    # Skip future dates
+    if [[ $YEAR -eq $CURRENT_YEAR && $month -eq $CURRENT_MONTH && $day -gt $CURRENT_DAY ]]; then
+      continue
     fi
     
-    # Special case for 2012 - only July onward is available
-    if [[ $YEAR -eq 2012 && $month -lt 7 ]]; then
-      echo "Skipping dates before July 2012 (not available)"
-      break
-    fi
-    
-    # Download PDF directly to the output directory (no month subfolders)
-    TOTAL_DOWNLOADS=$((TOTAL_DOWNLOADS + 1))
+    # Download PDF directly to the output directory
+    ((TOTAL_DOWNLOADS++))
     if download_pdf $YEAR $month $day "$OUTPUT_DIR"; then
-      SUCCESSFUL_DOWNLOADS=$((SUCCESSFUL_DOWNLOADS + 1))
+      ((SUCCESSFUL_DOWNLOADS++))
     else
-      FAILED_DOWNLOADS=$((FAILED_DOWNLOADS + 1))
+      ((FAILED_DOWNLOADS++))
     fi
     
     # Avoid rate limiting
     sleep $SLEEP_TIME
   done
   
+  # Show month summary
   month_successful=$((SUCCESSFUL_DOWNLOADS - month_successful_start))
   month_total=$((TOTAL_DOWNLOADS - month_total_start))
   echo "Completed month: $month_name ($month_successful/$month_total successful)"

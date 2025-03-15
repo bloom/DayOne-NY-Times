@@ -105,7 +105,6 @@ echo "Sleep time between API calls: $SLEEP_TIME seconds"
 EXTRA_ARGS=()  # Initialize empty array for args to pass to nyt_to_dayone.zsh
 
 # Process arguments to capture sleep parameter and pass the rest to nyt_to_dayone.zsh
-i=1
 while (( $# > 0 )); do
   case "$1" in
     --sleep)
@@ -118,8 +117,20 @@ while (( $# > 0 )); do
         usage
       fi
       ;;
+    # Known options that need to be passed to nyt_to_dayone.zsh
+    --pdf|--full-summary|--journal|--no-tag|--tag)
+      if [[ "$1" == "--journal" || "$1" == "--tag" ]] && (( $# > 1 )); then
+        # These options require a value
+        EXTRA_ARGS+=("$1" "$2")
+        shift 2
+      else
+        # Flag options without a value
+        EXTRA_ARGS+=("$1")
+        shift
+      fi
+      ;;
     *)
-      # Store arg for passing to the individual day script
+      # Unknown option - store for passing to the individual day script
       EXTRA_ARGS+=("$1")
       shift
       ;;
@@ -133,37 +144,50 @@ done
 # Array to collect all Day One entry URLs
 CREATED_ENTRIES=()
 
+# Function to process a single date
+function process_date() {
+  local date_seconds=$1
+  local day_number=$2
+  local total_days=$3
+  
+  # Format date in YYYY-MM-DD format
+  local date_str=$(date -j -f "%s" "$date_seconds" "+%Y-%m-%d")
+  
+  # Show progress
+  echo "Processing: $date_str ($day_number of $total_days)"
+  
+  # Build and execute the command
+  local cmd="$PWD/nyt_to_dayone.zsh \"$date_str\""
+  [[ ${#EXTRA_ARGS[@]} -gt 0 ]] && cmd+=" ${EXTRA_ARGS[*]}"
+  
+  # Execute and capture output
+  local output=$(eval $cmd)
+  
+  # Display the captured output
+  echo "$output"
+  
+  # Extract the Day One deep link if present
+  local deep_link=$(echo "$output" | grep "dayone://view?entryId=")
+  [[ -n "$deep_link" ]] && CREATED_ENTRIES+=("$date_str: $deep_link")
+  
+  # Return success
+  return 0
+}
+
 # Process each day in the range
 CURRENT_SECONDS=$START_SECONDS
 for ((day=1; day<=DAYS_IN_RANGE; day++)); do
-  # Format current date in YYYY-MM-DD format
-  CURRENT_DATE=$(date -j -f "%s" "$CURRENT_SECONDS" "+%Y-%m-%d")
-  
-  # Show progress
-  echo "Processing: $CURRENT_DATE ($day of $DAYS_IN_RANGE)"
-  
-  # Call the single-day script with appropriate arguments and capture output
-  if [[ ${#EXTRA_ARGS[@]} -eq 0 ]]; then
-    OUTPUT=$($PWD/nyt_to_dayone.zsh "$CURRENT_DATE")
-  else
-    OUTPUT=$($PWD/nyt_to_dayone.zsh "$CURRENT_DATE" "${EXTRA_ARGS[@]}")
-  fi
-  
-  # Display the captured output
-  echo "$OUTPUT"
-  
-  # Extract the Day One deep link if present in the output
-  DEEP_LINK=$(echo "$OUTPUT" | grep "dayone://view?entryId=")
-  if [[ -n "$DEEP_LINK" ]]; then
-    CREATED_ENTRIES+=("$CURRENT_DATE: $DEEP_LINK")
-  fi
+  # Process this date
+  process_date "$CURRENT_SECONDS" "$day" "$DAYS_IN_RANGE"
   
   # Move to next day
   CURRENT_SECONDS=$((CURRENT_SECONDS + 86400))
   
-  # Add delay to avoid API rate limiting
-  echo "Waiting $SLEEP_TIME seconds before next request (to avoid API rate limiting)..."
-  sleep $SLEEP_TIME
+  # Add delay to avoid API rate limiting (skip for last date)
+  if [[ $day -lt $DAYS_IN_RANGE ]]; then
+    echo "Waiting $SLEEP_TIME seconds before next request (to avoid API rate limiting)..."
+    sleep $SLEEP_TIME
+  fi
 done
 
 # -----------------------------------------------------------------------------

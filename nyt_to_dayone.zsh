@@ -173,6 +173,37 @@ else
   fi
 fi
 
+# -----------------------------------------------------------------------------
+# Historical Events Processing
+# -----------------------------------------------------------------------------
+
+# Initialize variable for historical event
+HISTORICAL_EVENT=""
+
+# Check if historical-events.json exists
+if [[ -f "$PWD/historical-events.json" ]]; then
+  echo "Checking for historical events that might correspond to this newspaper date..."
+  
+  # Check if jq is available for JSON processing
+  if (( $+commands[jq] )); then
+    # Calculate the "event date" which would be the day before the newspaper date
+    # (Since newspapers report on events from the previous day)
+    EVENT_DATE=$(date -j -v-1d -f "%Y-%m-%d" "$DATE" +"%B %-d, %Y")
+    
+    # Extract event if date matches
+    if [[ -n "$EVENT_DATE" ]]; then
+      HISTORICAL_EVENT=$(jq -r --arg date "$EVENT_DATE" '.[] | select(.Date == $date) | .Event' "$PWD/historical-events.json")
+      
+      if [[ -n "$HISTORICAL_EVENT" ]]; then
+        echo "Found historical event for newspaper date $DATE (event occurred on $EVENT_DATE): $HISTORICAL_EVENT"
+      fi
+    fi
+  else
+    echo "Warning: jq not found, skipping historical events check"
+    echo "To enable historical events feature, install jq: brew install jq"
+  fi
+fi
+
 # Get day of month for filtering headlines
 DAY=$(date -j -f "%Y-%m-%d" "$DATE" +%-d)
 
@@ -273,6 +304,33 @@ echo "Fetching data from NYT Archive API..."
 TOP_HEADLINES=""
 CONTENT_SUMMARY=""
 
+# Function to extract headlines using jq
+function extract_headlines() {
+  local json_file="$1"
+  local date_prefix="$2"
+  
+  # Try to get front page articles first
+  local headlines=$(jq -r --arg date "$date_prefix" \
+    '.response.docs[] | select(.pub_date | startswith($date)) | select(.print_page == "1") | 
+     "- \(.headline.main)"' \
+    "$json_file" | head -6)
+  
+  # If no front page articles, try news articles
+  if [[ -z "$headlines" ]]; then
+    headlines=$(jq -r --arg date "$date_prefix" \
+      '.response.docs[] | select(.pub_date | startswith($date)) | select(.type_of_material == "News") | 
+       "- \(.headline.main)"' \
+      "$json_file" | head -6)
+  fi
+  
+  # Remove author information
+  if [[ -n "$headlines" ]]; then
+    headlines=$(echo "$headlines" | sed -E 's/ [B|b]y [^,]+,?//g')
+  fi
+  
+  echo "$headlines"
+}
+
 # Process API response if successful
 if [[ -s archive.json ]]; then
   # Check if jq is available for JSON processing
@@ -282,24 +340,8 @@ if [[ -s archive.json ]]; then
     
     echo "Extracting content for $DATE..."
     
-    # Extract top headlines from front page articles (we'll remove author info later)
-    TOP_HEADLINES=$(jq -r --arg date "$PUB_DATE_PREFIX" \
-      '.response.docs[] | select(.pub_date | startswith($date)) | select(.print_page == "1") | 
-       "- \(.headline.main)"' \
-      archive.json | head -6)
-    
-    # If no front page articles found, try news articles
-    if [[ -z "$TOP_HEADLINES" ]]; then
-      TOP_HEADLINES=$(jq -r --arg date "$PUB_DATE_PREFIX" \
-        '.response.docs[] | select(.pub_date | startswith($date)) | select(.type_of_material == "News") | 
-         "- \(.headline.main)"' \
-        archive.json | head -6)
-    fi
-    
-    # Remove author information from headlines (anything starting with " By ")
-    if [[ -n "$TOP_HEADLINES" ]]; then
-      TOP_HEADLINES=$(echo "$TOP_HEADLINES" | sed -E 's/ [B|b]y [^,]+,?//g')
-    fi
+    # Extract headlines using our function
+    TOP_HEADLINES=$(extract_headlines "archive.json" "$PUB_DATE_PREFIX")
     
     # If still no headlines found (e.g., very recent date), attempt a retry
     if [[ -z "$TOP_HEADLINES" ]]; then
@@ -315,36 +357,15 @@ if [[ -s archive.json ]]; then
       else
         echo "No headlines found for this date. Waiting 10 seconds and trying again..."
         
-        # Wait 10 seconds
-        sleep 10
-        
         # Try fetching from API again
         echo "Retrying API fetch..."
+        sleep 10
         /usr/bin/curl -s -o archive_retry.json "https://api.nytimes.com/svc/archive/v1/$YEAR/$MONTH.json?api-key=$API_KEY"
         
         # Process retry response if successful
         if [[ -s archive_retry.json && -n "$(command -v jq)" ]]; then
-          # Format date prefix for API filtering (YYYY-MM-DDT format)
-          PUB_DATE_PREFIX="$YEAR-$(printf "%02d" $MONTH)-$(printf "%02d" $DAY)T"
-          
-          # Extract top headlines from front page articles on retry
-          RETRY_TOP_HEADLINES=$(jq -r --arg date "$PUB_DATE_PREFIX" \
-            '.response.docs[] | select(.pub_date | startswith($date)) | select(.print_page == "1") | 
-             "- \(.headline.main)"' \
-            archive_retry.json | head -6)
-          
-          # If no front page articles found, try news articles
-          if [[ -z "$RETRY_TOP_HEADLINES" ]]; then
-            RETRY_TOP_HEADLINES=$(jq -r --arg date "$PUB_DATE_PREFIX" \
-              '.response.docs[] | select(.pub_date | startswith($date)) | select(.type_of_material == "News") | 
-               "- \(.headline.main)"' \
-              archive_retry.json | head -6)
-          fi
-          
-          # Remove author information from headlines (anything starting with " By ")
-          if [[ -n "$RETRY_TOP_HEADLINES" ]]; then
-            RETRY_TOP_HEADLINES=$(echo "$RETRY_TOP_HEADLINES" | sed -E 's/ [B|b]y [^,]+,?//g')
-          fi
+          # Extract headlines from retry using our function
+          RETRY_TOP_HEADLINES=$(extract_headlines "archive_retry.json" "$PUB_DATE_PREFIX")
           
           # If we got headlines on the retry, use them
           if [[ -n "$RETRY_TOP_HEADLINES" ]]; then
@@ -352,13 +373,11 @@ if [[ -s archive.json ]]; then
             TOP_HEADLINES="$RETRY_TOP_HEADLINES"
           else
             echo "Note: Still no headlines found after retry"
-            # Leave TOP_HEADLINES empty
             TOP_HEADLINES=""
             FIRST_HEADLINE="The New York Times"
           fi
         else
           echo "Retry failed or jq not available."
-          # Leave TOP_HEADLINES empty
           TOP_HEADLINES=""
           FIRST_HEADLINE="The New York Times"
         fi
@@ -367,35 +386,26 @@ if [[ -s archive.json ]]; then
     
     # Only build full summary if requested
     if [[ "$INCLUDE_FULL_SUMMARY" = true ]]; then
-      # Count total articles for this day
-      TOTAL_ARTICLES=$(jq --arg date "$PUB_DATE_PREFIX" \
-        '.response.docs | map(select(.pub_date | startswith($date))) | length' \
-        archive.json)
+      # Use a single jq query to extract all the needed data more efficiently
+      SUMMARY_DATA=$(jq -r --arg date "$PUB_DATE_PREFIX" '
+        {
+          total: (.response.docs | map(select(.pub_date | startswith($date))) | length),
+          longest: (.response.docs | map(select(.pub_date | startswith($date))) | sort_by(.word_count) | reverse | .[0] | "\(.word_count) words | \(.headline.main) \(.byline.original // \"\")"),
+          opinions: (.response.docs | map(select(.pub_date | startswith($date)) | select(.news_desk == "OpEd" or .section_name == "Opinion" or .type_of_material == "Op-Ed")) | .[0:3] | map("- \(.headline.main) \(.byline.original // \"\")") | join("\n")),
+          sections: (.response.docs | map(select(.pub_date | startswith($date)) | .section_name) | group_by(.) | map({name: .[0], count: length}) | sort_by(.count) | reverse | .[0:5] | map("- \(.name // \"Uncategorized\"): \(.count) articles") | join("\n"))
+        }' archive.json)
       
-      # Extract opinion pieces
-      TOP_OPINIONS=$(jq -r --arg date "$PUB_DATE_PREFIX" \
-        '.response.docs[] | select(.pub_date | startswith($date)) | 
-         select(.news_desk == "OpEd" or .section_name == "Opinion" or .type_of_material == "Op-Ed") | 
-         "- \(.headline.main) \(.byline.original // "")"' \
-        archive.json | head -3)
+      # Extract results to variables
+      TOTAL_ARTICLES=$(echo "$SUMMARY_DATA" | jq -r '.total')
+      LONGEST_ARTICLE=$(echo "$SUMMARY_DATA" | jq -r '.longest')
+      TOP_OPINIONS=$(echo "$SUMMARY_DATA" | jq -r '.opinions')
+      SECTION_COUNTS=$(echo "$SUMMARY_DATA" | jq -r '.sections')
       
-      # Extract trending keywords
+      # Extract trending keywords (this is more complex and kept separate)
       TOP_KEYWORDS=$(jq -r --arg date "$PUB_DATE_PREFIX" \
         '.response.docs[] | select(.pub_date | startswith($date)) | .keywords[].value' \
         archive.json | sort | uniq -c | sort -rn | head -10 | 
         awk '{print "- " $2 " " $3 " " $4 " " $5 " " $6 " " $7}' | sed 's/ *$//')
-      
-      # Get section breakdown
-      SECTION_COUNTS=$(jq -r --arg date "$PUB_DATE_PREFIX" \
-        '.response.docs[] | select(.pub_date | startswith($date)) | .section_name' \
-        archive.json | sort | uniq -c | sort -rn | head -5 | 
-        awk '{print "- " $2 ": " $1 " articles"}' | sed 's/^- :/- Uncategorized:/')
-      
-      # Find longest article
-      LONGEST_ARTICLE=$(jq -r --arg date "$PUB_DATE_PREFIX" \
-        '.response.docs[] | select(.pub_date | startswith($date)) | 
-         "\(.word_count) words | \(.headline.main) \(.byline.original // "")"' \
-        archive.json | sort -rn | head -1)
       
       # Create comprehensive content summary
       CONTENT_SUMMARY="### NYT Publication Summary
@@ -439,8 +449,24 @@ else
   REMAINING_HEADLINES=""
 fi
 
-# Override with custom headline if provided
-if [[ -n "$CUSTOM_HEADLINE" ]]; then
+# Override with historical event if available
+if [[ -n "$HISTORICAL_EVENT" ]]; then
+  echo "Using historical event as top headline: $HISTORICAL_EVENT"
+  # Save original first headline to use in remaining headlines
+  if [[ -n "$FIRST_HEADLINE" ]]; then
+    # When using historical event, include ALL headlines in the remaining list
+    REMAINING_HEADLINES="- $FIRST_HEADLINE
+$REMAINING_HEADLINES"
+  fi
+  FIRST_HEADLINE="$HISTORICAL_EVENT"
+  
+  # Automatically add the "Historical Event" tag (respecting user's tag preferences)
+  if [[ "$ADD_DEFAULT_TAG" = true ]]; then
+    echo "Adding \"Historical Event\" tag to entry"
+    ADDITIONAL_TAGS+=("Historical Event")
+  fi
+# Otherwise override with custom headline if provided
+elif [[ -n "$CUSTOM_HEADLINE" ]]; then
   FIRST_HEADLINE="$CUSTOM_HEADLINE"
 fi
 
@@ -495,35 +521,64 @@ fi
 # Print journal information
 echo "Using journal: $JOURNAL_NAME"
 
-# Build Day One commands (with and without journal name)
+# Build tag command string for Day One
+ALL_TAGS=()
+
+# Populate tag array - add default tag if enabled and any additional tags
+[[ "$ADD_DEFAULT_TAG" = true ]] && ALL_TAGS+=("$DEFAULT_TAG")
+[[ ${#ADDITIONAL_TAGS[@]} -gt 0 ]] && ALL_TAGS+=("${ADDITIONAL_TAGS[@]}")
+
+# Build the tag command string using the correct format
 TAG_CMD=""
-# Add default tag if enabled
-if [[ "$ADD_DEFAULT_TAG" = true ]]; then
-  TAG_CMD="-t \"$DEFAULT_TAG\""
-fi
-
-# Add any additional tags
-for tag in "${ADDITIONAL_TAGS[@]}"; do
-  TAG_CMD="$TAG_CMD -t \"$tag\""
-done
-
-if [[ ${#PHOTO_ARGS[@]} -gt 0 ]]; then
-  # For entries with attachments
-  ATTACHMENT_CMD="-a"
-  for PHOTO in "${PHOTO_ARGS[@]}"; do
-    ATTACHMENT_CMD="$ATTACHMENT_CMD \"$PHOTO\""
+if [[ ${#ALL_TAGS[@]} -gt 0 ]]; then
+  TAG_CMD="--tags"
+  for tag in "${ALL_TAGS[@]}"; do
+    TAG_CMD="$TAG_CMD \"$tag\""
   done
-  
-  # Command with specified journal
-  CMD_WITH_JOURNAL="dayone2 -j \"$JOURNAL_NAME\" -d \"$DATE\" --all-day $TAG_CMD $ATTACHMENT_CMD -- new \"$ENTRY_TEXT\""
-  
-  # Command without specifying journal (uses default)
-  CMD_WITHOUT_JOURNAL="dayone2 -d \"$DATE\" --all-day $TAG_CMD $ATTACHMENT_CMD -- new \"$ENTRY_TEXT\""
-else
-  # For entries without attachments
-  CMD_WITH_JOURNAL="dayone2 -j \"$JOURNAL_NAME\" -d \"$DATE\" --all-day $TAG_CMD new \"$ENTRY_TEXT\""
-  CMD_WITHOUT_JOURNAL="dayone2 -d \"$DATE\" --all-day $TAG_CMD new \"$ENTRY_TEXT\""
 fi
+
+# Show which tags will be applied
+echo "Tags configuration:"
+if [[ ${#ALL_TAGS[@]} -eq 0 ]]; then
+  echo "- No tags will be applied (--no-tag was specified)"
+else
+  echo "- Tags to be applied: ${ALL_TAGS[*]}"
+fi
+
+# Build the Day One command
+function build_dayone_cmd() {
+  local use_journal=$1
+  local cmd="dayone2"
+  
+  # Add basic parameters
+  [[ "$use_journal" = true ]] && cmd+=" -j \"$JOURNAL_NAME\""
+  cmd+=" -d \"$DATE\" --all-day"
+  
+  # Add tags if any
+  [[ -n "$TAG_CMD" ]] && cmd+=" $TAG_CMD"
+  
+  # Add attachments if any
+  if [[ ${#PHOTO_ARGS[@]} -gt 0 ]]; then
+    cmd+=" -a"
+    for PHOTO in "${PHOTO_ARGS[@]}"; do
+      cmd+=" \"$PHOTO\""
+    done
+    cmd+=" --"
+  fi
+  
+  # Add entry content
+  cmd+=" new \"$ENTRY_TEXT\""
+  
+  echo "$cmd"
+}
+
+# Build commands for both with and without journal
+CMD_WITH_JOURNAL=$(build_dayone_cmd true)
+CMD_WITHOUT_JOURNAL=$(build_dayone_cmd false)
+
+# Log the command for debugging
+echo "Command to be executed:"
+echo "$CMD_WITH_JOURNAL"
 
 # Try with journal first, then fall back to no journal if it fails
 echo "Executing command with specified journal..."
