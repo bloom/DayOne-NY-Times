@@ -272,9 +272,11 @@ cd "$TEMP_DIR" || exit 1
 # Fetch and Process Front Page PDF
 # -----------------------------------------------------------------------------
 
-# Check if the current date is in the corrupted PDFs list
-if is_corrupted_pdf "$DATE"; then
+# First, check if the date is in the corrupted PDFs list or manually marked as corrupted
+if is_corrupted_pdf "$DATE" || [[ "$PDF_CORRUPTED" = true ]]; then
   echo "Warning: PDF for $DATE is known to be corrupted. Skipping PDF/JPG processing."
+  
+  # Set the corrupted flag (in case it was set by the is_corrupted_pdf function)
   PDF_CORRUPTED=true
   
   # Notify about skipped attachments but continue processing
@@ -286,9 +288,12 @@ if is_corrupted_pdf "$DATE"; then
     echo "JPG attachment was requested but will be skipped."
   fi
   
-  # Ensure we continue with the rest of the process
+  # IMPORTANT: Ensure we don't try to process any PDFs
   ATTACH_PDF=false
   ATTACH_JPG=false
+  
+  # Skip the PDF processing section entirely
+  echo "Continuing without PDF/JPG processing..."
 else
   # Fetch PDF if needed for either PDF or JPG attachment
   if [[ "$ATTACH_PDF" = true || "$ATTACH_JPG" = true ]]; then
@@ -561,9 +566,10 @@ echo "Creating Day One entry..."
 # Prepare photo attachment arguments
 PHOTO_ARGS=()
 
-# Skip attachments completely if the PDF is corrupted
+# Skip attachments completely if the PDF is corrupted (should already be set, but double-check)
 if [[ "$PDF_CORRUPTED" = true ]]; then
   echo "Skipping attachments due to corrupted PDF..."
+  # These should already be set to false earlier, but ensure it again
   ATTACH_JPG=false
   ATTACH_PDF=false
 elif [[ "$ATTACH_JPG" = true && "$ATTACH_PDF" = true ]]; then
@@ -646,26 +652,48 @@ echo "$CMD_WITH_JOURNAL"
 
 # Try with journal first, then fall back to no journal if it fails
 echo "Executing command with specified journal..."
+echo "DEBUG: Command = $CMD_WITH_JOURNAL"
+
+# Execute the command
 RESULT=$(eval $CMD_WITH_JOURNAL 2>&1)
+COMMAND_STATUS=$?
+echo "DEBUG: Command exit status = $COMMAND_STATUS"
+echo "DEBUG: Result = $RESULT"
 
 # Check if there was an error with the journal
 if [[ "$RESULT" == *"Invalid value(s) for option -j, --journal"* ]]; then
   echo "Warning: Journal '$JOURNAL_NAME' not found, saving to default journal instead"
+  echo "DEBUG: Falling back to command = $CMD_WITHOUT_JOURNAL"
   RESULT=$(eval $CMD_WITHOUT_JOURNAL)
+  COMMAND_STATUS=$?
+  echo "DEBUG: Fallback command exit status = $COMMAND_STATUS"
 fi
 
 # -----------------------------------------------------------------------------
 # Clean Up and Show Results
 # -----------------------------------------------------------------------------
 
-# Extract UUID from Day One response
-ENTRY_UUID=$(echo "$RESULT" | grep -o "uuid: [A-Z0-9]\+" | awk '{print $2}')
-
-# Clean up temporary files
-rm -rf "$TEMP_DIR"
-
-# Print success message with deep link if available
-echo "Done! Entry created for $DATE with NYT front page and headlines."
-if [[ -n "$ENTRY_UUID" ]]; then
-  echo "View in Day One: dayone://view?entryId=$ENTRY_UUID"
+# Process the result including error checking
+if [[ $COMMAND_STATUS -eq 0 ]]; then
+  # Extract UUID from Day One response
+  ENTRY_UUID=$(echo "$RESULT" | grep -o "uuid: [A-Z0-9]\+" | awk '{print $2}')
+  echo "DEBUG: UUID extraction result = '$ENTRY_UUID'"
+  
+  # Clean up temporary files
+  rm -rf "$TEMP_DIR"
+  
+  # Print success message with deep link if available
+  echo "Done! Entry created for $DATE with NYT front page and headlines."
+  if [[ -n "$ENTRY_UUID" ]]; then
+    echo "View in Day One: dayone://view?entryId=$ENTRY_UUID"
+  else
+    echo "Warning: Entry was created but UUID could not be extracted from response."
+  fi
+else
+  echo "ERROR: Failed to create Day One entry (exit code $COMMAND_STATUS)"
+  echo "ERROR: Command output was: $RESULT"
+  
+  # Clean up temporary files
+  rm -rf "$TEMP_DIR"
+  exit $COMMAND_STATUS
 fi
