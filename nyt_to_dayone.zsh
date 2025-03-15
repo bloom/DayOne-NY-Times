@@ -30,6 +30,8 @@ function usage() {
   echo "  --full-summary   Include comprehensive NYT content analysis"
   echo "  --journal NAME   Specify Day One journal name (default: The New York Times)"
   echo "  --no-tag         Don't add the default tag \"$DEFAULT_TAG\""
+  echo "  --tag TAG        Add additional tag (can be used multiple times)"
+  echo "  --headline TEXT  Replace the first headline with custom text"
   echo ""
   echo "Environment variables:"
   echo "  NYT_API_KEY      Your New York Times API key (required)"
@@ -40,6 +42,8 @@ function usage() {
   echo "  $script --pdf 2024-01-01                      # Include PDF attachment"
   echo "  $script --journal \"History\" 2022-09-08        # Save to different journal"
   echo "  $script --no-tag 2024-02-15                   # Skip adding the default tag"
+  echo "  $script --tag \"Historical Event\" 2021-01-07   # Add additional tag"
+  echo "  $script --headline \"Capitol Riots\" 2021-01-07 # Use custom headline"
   
   exit 1
 }
@@ -56,6 +60,8 @@ DATE=""                 # Date to fetch (empty = today)
 JOURNAL_NAME="The New York Times"  # Default journal name
 DEFAULT_TAG="The New York Times"  # Default tag (can be disabled)
 ADD_DEFAULT_TAG=true    # Whether to add the default tag
+ADDITIONAL_TAGS=()      # Additional tags to add
+CUSTOM_HEADLINE=""      # Custom headline to use instead of NYT first headline
 
 # Process command line arguments
 while (( $# > 0 )); do
@@ -74,6 +80,26 @@ while (( $# > 0 )); do
     --no-tag)
       ADD_DEFAULT_TAG=false
       shift
+      ;;
+    --tag)
+      # Require tag argument
+      if (( $# > 1 )); then
+        ADDITIONAL_TAGS+=("$2")
+        shift 2
+      else
+        echo "Error: --tag requires a tag value"
+        usage
+      fi
+      ;;
+    --headline)
+      # Require headline text argument
+      if (( $# > 1 )); then
+        CUSTOM_HEADLINE="$2"
+        shift 2
+      else
+        echo "Error: --headline requires text"
+        usage
+      fi
       ;;
     --journal)
       # Require journal name argument
@@ -413,6 +439,11 @@ else
   REMAINING_HEADLINES=""
 fi
 
+# Override with custom headline if provided
+if [[ -n "$CUSTOM_HEADLINE" ]]; then
+  FIRST_HEADLINE="$CUSTOM_HEADLINE"
+fi
+
 # Create entry text with appropriate format
 if [[ "$ATTACH_JPG" = true || "$ATTACH_PDF" = true ]]; then
   # Entry with image placeholder and headline above
@@ -466,9 +497,15 @@ echo "Using journal: $JOURNAL_NAME"
 
 # Build Day One commands (with and without journal name)
 TAG_CMD=""
+# Add default tag if enabled
 if [[ "$ADD_DEFAULT_TAG" = true ]]; then
   TAG_CMD="-t \"$DEFAULT_TAG\""
 fi
+
+# Add any additional tags
+for tag in "${ADDITIONAL_TAGS[@]}"; do
+  TAG_CMD="$TAG_CMD -t \"$tag\""
+done
 
 if [[ ${#PHOTO_ARGS[@]} -gt 0 ]]; then
   # For entries with attachments
