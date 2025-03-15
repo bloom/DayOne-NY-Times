@@ -24,6 +24,9 @@ function usage() {
   echo "  START_DATE: First date to fetch (YYYY-MM-DD format)"
   echo "  END_DATE:   Last date to fetch (YYYY-MM-DD format)"
   echo ""
+  echo "Options:"
+  echo "  --sleep SEC      Sleep time between API calls in seconds (default: 7)"
+  echo ""
   echo "Options: (passed to nyt_to_dayone.zsh)"
   echo "  --pdf            Also attach the PDF file (JPG only by default)"
   echo "  --full-summary   Include comprehensive NYT content analysis"
@@ -33,6 +36,7 @@ function usage() {
   echo "  $script 2025-01-01 2025-01-31                  # Fetch all of January 2025"
   echo "  $script 2025-01-15 2025-02-15                  # Fetch a custom date range"
   echo "  $script 2025-01-01 2025-01-31 --pdf            # Include PDF attachments"
+  echo "  $script 2025-01-01 2025-01-31 --sleep 3        # Use shorter delay between API calls"
   echo "  $script 2025-01-01 2025-01-31 --journal \"History\"  # Use specific journal"
   
   exit 1
@@ -41,6 +45,9 @@ function usage() {
 # -----------------------------------------------------------------------------
 # Input Validation
 # -----------------------------------------------------------------------------
+
+# Default settings
+SLEEP_TIME=7   # Default sleep between API calls
 
 # Check if required arguments are provided
 if [[ $# -lt 2 ]]; then
@@ -92,9 +99,32 @@ DAYS_IN_RANGE=$(( (END_SECONDS - START_SECONDS) / 86400 + 1 ))
 
 # Display processing information
 echo "Fetching NYT entries from $START_DATE to $END_DATE ($DAYS_IN_RANGE days)..."
+echo "Sleep time between API calls: $SLEEP_TIME seconds"
 
-# Store remaining arguments to pass to the individual day script
-EXTRA_ARGS=("$@")
+# Parse command line arguments for sleep parameter
+EXTRA_ARGS=()  # Initialize empty array for args to pass to nyt_to_dayone.zsh
+
+# Process arguments to capture sleep parameter and pass the rest to nyt_to_dayone.zsh
+i=1
+while (( $# > 0 )); do
+  case "$1" in
+    --sleep)
+      # Require sleep time argument
+      if (( $# > 1 )); then
+        SLEEP_TIME="$2"
+        shift 2
+      else
+        echo "Error: --sleep requires a value in seconds"
+        usage
+      fi
+      ;;
+    *)
+      # Store arg for passing to the individual day script
+      EXTRA_ARGS+=("$1")
+      shift
+      ;;
+  esac
+done
 
 # -----------------------------------------------------------------------------
 # Process Each Day in Range
@@ -132,7 +162,8 @@ for ((day=1; day<=DAYS_IN_RANGE; day++)); do
   CURRENT_SECONDS=$((CURRENT_SECONDS + 86400))
   
   # Add delay to avoid API rate limiting
-  sleep 7
+  echo "Waiting $SLEEP_TIME seconds before next request (to avoid API rate limiting)..."
+  sleep $SLEEP_TIME
 done
 
 # -----------------------------------------------------------------------------
