@@ -2,7 +2,7 @@
 #
 # nyt_to_dayone.zsh
 #
-# Fetches New York Times front page and headlines for a specific date
+# Fetches The New York Times front page and headlines for a specific date
 # and creates a Day One journal entry with the content.
 #
 # Author: Paul Mayne
@@ -28,7 +28,7 @@ function usage() {
   echo "  -h, --help       Show this help message"
   echo "  --pdf            Also attach the PDF file (JPG only by default)"
   echo "  --full-summary   Include comprehensive NYT content analysis"
-  echo "  --journal NAME   Specify Day One journal name (default: New York Times)"
+  echo "  --journal NAME   Specify Day One journal name (default: The New York Times)"
   echo ""
   echo "Environment variables:"
   echo "  NYT_API_KEY      Your New York Times API key (required)"
@@ -264,7 +264,7 @@ if [[ -s archive.json ]]; then
       else
         echo "Note: No headlines found for this date"
         TOP_HEADLINES="- No headlines found for this date"
-        FIRST_HEADLINE="New York Times"
+        FIRST_HEADLINE="The New York Times"
       fi
     fi
     
@@ -338,7 +338,7 @@ if [[ -n "$TOP_HEADLINES" ]]; then
   # Get the remaining headlines (skip the first one)
   REMAINING_HEADLINES=$(echo "$TOP_HEADLINES" | tail -n +2)
 else
-  FIRST_HEADLINE="New York Times"
+  FIRST_HEADLINE="The New York Times"
   REMAINING_HEADLINES=""
 fi
 
@@ -402,14 +402,14 @@ if [[ ${#PHOTO_ARGS[@]} -gt 0 ]]; then
   done
   
   # Command with specified journal
-  CMD_WITH_JOURNAL="dayone2 -j \"$JOURNAL_NAME\" -d \"$DATE\" --all-day -t \"New York Times\" $ATTACHMENT_CMD -- new \"$ENTRY_TEXT\""
+  CMD_WITH_JOURNAL="dayone2 -j \"$JOURNAL_NAME\" -d \"$DATE\" --all-day -t \"The New York Times\" $ATTACHMENT_CMD -- new \"$ENTRY_TEXT\""
   
   # Command without specifying journal (uses default)
-  CMD_WITHOUT_JOURNAL="dayone2 -d \"$DATE\" --all-day -t \"New York Times\" $ATTACHMENT_CMD -- new \"$ENTRY_TEXT\""
+  CMD_WITHOUT_JOURNAL="dayone2 -d \"$DATE\" --all-day -t \"The New York Times\" $ATTACHMENT_CMD -- new \"$ENTRY_TEXT\""
 else
   # For entries without attachments
-  CMD_WITH_JOURNAL="dayone2 -j \"$JOURNAL_NAME\" -d \"$DATE\" --all-day -t \"New York Times\" new \"$ENTRY_TEXT\""
-  CMD_WITHOUT_JOURNAL="dayone2 -d \"$DATE\" --all-day -t \"New York Times\" new \"$ENTRY_TEXT\""
+  CMD_WITH_JOURNAL="dayone2 -j \"$JOURNAL_NAME\" -d \"$DATE\" --all-day -t \"The New York Times\" new \"$ENTRY_TEXT\""
+  CMD_WITHOUT_JOURNAL="dayone2 -d \"$DATE\" --all-day -t \"The New York Times\" new \"$ENTRY_TEXT\""
 fi
 
 # Try with journal first, then fall back to no journal if it fails
