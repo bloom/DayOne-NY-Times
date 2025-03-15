@@ -32,6 +32,7 @@ function usage() {
   echo "  --no-tag         Don't add the default tag \"$DEFAULT_TAG\""
   echo "  --tag TAG        Add additional tag (can be used multiple times)"
   echo "  --headline TEXT  Replace the first headline with custom text"
+  echo "  --bad-pdf        Mark this date as having a corrupted PDF"
   echo ""
   echo "Environment variables:"
   echo "  NYT_API_KEY      Your New York Times API key (required)"
@@ -44,6 +45,7 @@ function usage() {
   echo "  $script --no-tag 2024-02-15                   # Skip adding the default tag"
   echo "  $script --tag \"Historical Event\" 2021-01-07   # Add additional tag"
   echo "  $script --headline \"Capitol Riots\" 2021-01-07 # Use custom headline"
+  echo "  $script --bad-pdf 2018-01-10                   # Handle known corrupted PDF"
   
   exit 1
 }
@@ -62,6 +64,25 @@ DEFAULT_TAG="The New York Times"  # Default tag (can be disabled)
 ADD_DEFAULT_TAG=true    # Whether to add the default tag
 ADDITIONAL_TAGS=()      # Additional tags to add
 CUSTOM_HEADLINE=""      # Custom headline to use instead of NYT first headline
+
+# List of dates with known corrupted PDFs (YYYY-MM-DD format)
+CORRUPTED_PDFS=(
+  "2018-01-10"
+  "2018-01-11" 
+  "2018-01-12"
+  "2018-01-13"
+)
+
+# Function to check if a date has a corrupted PDF
+function is_corrupted_pdf() {
+  local check_date="$1"
+  for bad_date in "${CORRUPTED_PDFS[@]}"; do
+    if [[ "$check_date" == "$bad_date" ]]; then
+      return 0  # True, it is corrupted
+    fi
+  done
+  return 1  # False, it's not in the corrupted list
+}
 
 # Process command line arguments
 while (( $# > 0 )); do
@@ -100,6 +121,14 @@ while (( $# > 0 )); do
         echo "Error: --headline requires text"
         usage
       fi
+      ;;
+    --bad-pdf)
+      # Mark the date as having a corrupted PDF
+      # Note: This is just informational for this run; to permanently add,
+      # the user needs to edit the script
+      echo "Marking $DATE as having a corrupted PDF"
+      PDF_CORRUPTED=true
+      shift
       ;;
     --journal)
       # Require journal name argument
@@ -242,53 +271,71 @@ cd "$TEMP_DIR" || exit 1
 # Fetch and Process Front Page PDF
 # -----------------------------------------------------------------------------
 
-# Fetch PDF if needed for either PDF or JPG attachment
-if [[ "$ATTACH_PDF" = true || "$ATTACH_JPG" = true ]]; then
-  echo "Fetching NYT front page for $DATE..."
-  PDF_URL="https://static01.nyt.com/images/$URL_DATE/nytfrontpage/scan.pdf"
-  /usr/bin/curl -s -o frontpage.pdf "$PDF_URL"
+# Set a flag for whether we have PDF/JPG attachments
+PDF_CORRUPTED=false
 
-  # Verify download was successful
-  if [[ ! -s frontpage.pdf ]]; then
-    echo "Error: Failed to download NYT front page for $DATE"
-    rm -rf "$TEMP_DIR"
-    exit 1
+# Check if the date is in the corrupted PDFs list
+if is_corrupted_pdf "$DATE"; then
+  echo "Warning: PDF for $DATE is known to be corrupted. Skipping PDF/JPG processing."
+  PDF_CORRUPTED=true
+  
+  # Create empty attachments to handle in template
+  if [[ "$ATTACH_PDF" = true ]]; then
+    echo "PDF attachment was requested but will be skipped."
   fi
-
-  # Convert PDF to JPG if needed
+  
   if [[ "$ATTACH_JPG" = true ]]; then
-    echo "Converting PDF to high-resolution JPG..."
-    
-    # Method 1: Use macOS Quick Look for high quality rendering
-    qlmanage -t -s 4500 -o . frontpage.pdf
-    
-    if [[ -f "frontpage.pdf.png" ]]; then
-      # Convert PNG to JPG with high quality
-      echo "Converting PNG to JPG with high quality..."
-      sips -s format jpeg -s formatOptions high frontpage.pdf.png --out frontpage.jpg
-      rm frontpage.pdf.png
+    echo "JPG attachment was requested but will be skipped."
+  fi
+else
+  # Fetch PDF if needed for either PDF or JPG attachment
+  if [[ "$ATTACH_PDF" = true || "$ATTACH_JPG" = true ]]; then
+    echo "Fetching NYT front page for $DATE..."
+    PDF_URL="https://static01.nyt.com/images/$URL_DATE/nytfrontpage/scan.pdf"
+    /usr/bin/curl -s -o frontpage.pdf "$PDF_URL"
+
+    # Verify download was successful
+    if [[ ! -s frontpage.pdf ]]; then
+      echo "Error: Failed to download NYT front page for $DATE"
+      rm -rf "$TEMP_DIR"
+      exit 1
+    fi
+
+    # Convert PDF to JPG if needed
+    if [[ "$ATTACH_JPG" = true ]]; then
+      echo "Converting PDF to high-resolution JPG..."
       
-      # Check the resolution of the output
-      WIDTH=$(sips -g pixelWidth frontpage.jpg | grep pixelWidth | awk '{print $2}')
-      HEIGHT=$(sips -g pixelHeight frontpage.jpg | grep pixelHeight | awk '{print $2}')
-      echo "High resolution image created: ${WIDTH}×${HEIGHT} pixels"
-    else
-      # Fallback Method: Use sips directly with upscaling
-      echo "Using fallback conversion method..."
+      # Method 1: Use macOS Quick Look for high quality rendering
+      qlmanage -t -s 4500 -o . frontpage.pdf
       
-      # First convert to regular JPG
-      sips -s format jpeg frontpage.pdf --out frontpage.jpg
-      
-      # Then scale up by 6x for better quality
-      WIDTH=$(sips -g pixelWidth frontpage.jpg | grep pixelWidth | awk '{print $2}')
-      HEIGHT=$(sips -g pixelHeight frontpage.jpg | grep pixelHeight | awk '{print $2}')
-      WIDTH=${WIDTH%.*}
-      HEIGHT=${HEIGHT%.*}
-      NEW_WIDTH=$((WIDTH * 6))
-      NEW_HEIGHT=$((HEIGHT * 6))
-      
-      echo "Resizing from ${WIDTH}x${HEIGHT} to ${NEW_WIDTH}x${NEW_HEIGHT}..."
-      sips -z $NEW_HEIGHT $NEW_WIDTH frontpage.jpg -s formatOptions high
+      if [[ -f "frontpage.pdf.png" ]]; then
+        # Convert PNG to JPG with high quality
+        echo "Converting PNG to JPG with high quality..."
+        sips -s format jpeg -s formatOptions high frontpage.pdf.png --out frontpage.jpg
+        rm frontpage.pdf.png
+        
+        # Check the resolution of the output
+        WIDTH=$(sips -g pixelWidth frontpage.jpg | grep pixelWidth | awk '{print $2}')
+        HEIGHT=$(sips -g pixelHeight frontpage.jpg | grep pixelHeight | awk '{print $2}')
+        echo "High resolution image created: ${WIDTH}×${HEIGHT} pixels"
+      else
+        # Fallback Method: Use sips directly with upscaling
+        echo "Using fallback conversion method..."
+        
+        # First convert to regular JPG
+        sips -s format jpeg frontpage.pdf --out frontpage.jpg
+        
+        # Then scale up by 6x for better quality
+        WIDTH=$(sips -g pixelWidth frontpage.jpg | grep pixelWidth | awk '{print $2}')
+        HEIGHT=$(sips -g pixelHeight frontpage.jpg | grep pixelHeight | awk '{print $2}')
+        WIDTH=${WIDTH%.*}
+        HEIGHT=${HEIGHT%.*}
+        NEW_WIDTH=$((WIDTH * 6))
+        NEW_HEIGHT=$((HEIGHT * 6))
+        
+        echo "Resizing from ${WIDTH}x${HEIGHT} to ${NEW_WIDTH}x${NEW_HEIGHT}..."
+        sips -z $NEW_HEIGHT $NEW_WIDTH frontpage.jpg -s formatOptions high
+      fi
     fi
   fi
 fi
@@ -471,7 +518,13 @@ elif [[ -n "$CUSTOM_HEADLINE" ]]; then
 fi
 
 # Create entry text with appropriate format
-if [[ "$ATTACH_JPG" = true || "$ATTACH_PDF" = true ]]; then
+if [[ "$PDF_CORRUPTED" = true ]]; then
+  # Entry with corrupted PDF notice
+  HEADER="#### The New York Times: $HEADER_DATE
+$FIRST_HEADLINE
+
+**(PDF is corrupted)**"
+elif [[ "$ATTACH_JPG" = true || "$ATTACH_PDF" = true ]]; then
   # Entry with image placeholder and headline above
   HEADER="#### The New York Times: $HEADER_DATE
 $FIRST_HEADLINE
@@ -505,7 +558,13 @@ echo "Creating Day One entry..."
 
 # Prepare photo attachment arguments
 PHOTO_ARGS=()
-if [[ "$ATTACH_JPG" = true && "$ATTACH_PDF" = true ]]; then
+
+# Skip attachments completely if the PDF is corrupted
+if [[ "$PDF_CORRUPTED" = true ]]; then
+  echo "Skipping attachments due to corrupted PDF..."
+  ATTACH_JPG=false
+  ATTACH_PDF=false
+elif [[ "$ATTACH_JPG" = true && "$ATTACH_PDF" = true ]]; then
   echo "Attaching both JPG and PDF..."
   PHOTO_ARGS=("frontpage.jpg" "frontpage.pdf")
 elif [[ "$ATTACH_JPG" = true ]]; then
