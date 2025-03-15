@@ -31,6 +31,7 @@ function usage() {
   echo "  --pdf                     Also attach the PDF file (JPG only by default)"
   echo "  --full-summary            Include comprehensive NYT content analysis"
   echo "  --dry-run                 Show what would be done without creating entries"
+  echo "  --sleep SEC               Sleep time between API calls in seconds (default: 7)"
   echo "  --start-date YYYY-MM-DD   Process events starting from this date"
   echo "  --end-date YYYY-MM-DD     Process events until this date"
   echo "  --event EVENT_NAME        Process only the specific event matching this name"
@@ -44,6 +45,7 @@ function usage() {
   echo "  $script --journal \"History\"              # Save to different journal"
   echo "  $script --start-date 2020-01-01           # Process events from 2020 onwards"
   echo "  $script --event \"Capitol Riots\"          # Process only the Capitol Riots event"
+  echo "  $script --sleep 10                        # Use longer delay between API calls"
   echo ""
   
   exit 1
@@ -156,6 +158,7 @@ DRY_RUN=false
 START_DATE=""
 END_DATE=""
 SPECIFIC_EVENT=""
+SLEEP_TIME=7   # Default sleep between API calls (seconds)
 
 # Process command line arguments
 while (( $# > 0 )); do
@@ -188,6 +191,16 @@ while (( $# > 0 )); do
     --dry-run)
       DRY_RUN=true
       shift
+      ;;
+    --sleep)
+      # Require sleep time argument
+      if (( $# > 1 )); then
+        SLEEP_TIME="$2"
+        shift 2
+      else
+        echo "Error: --sleep requires a value in seconds"
+        usage
+      fi
       ;;
     --start-date)
       # Require date argument
@@ -274,7 +287,11 @@ CREATED=0
 
 echo "\nBEGINNING PROCESSING\n-------------------"
 
+# Display sleep time information
+echo "Sleep time between API calls: $SLEEP_TIME seconds"
+
 # Process each event in the JSON file
+COUNTER=0
 jq -c '.[]' historical-events.json | while read -r event_json; do
   # Extract date and event text with a single jq call
   event_date=$(jq -r '.Date' <<< "$event_json")
@@ -285,6 +302,13 @@ jq -c '.[]' historical-events.json | while read -r event_json; do
     ((SKIPPED++))
     continue
   fi
+  
+  # Add a delay between API calls (skip for first entry)
+  if [[ $COUNTER -gt 0 && "$DRY_RUN" = false ]]; then
+    echo "Waiting $SLEEP_TIME seconds before next API call (to avoid rate limiting)..."
+    sleep $SLEEP_TIME
+  fi
+  ((COUNTER++))
   
   # Process this event
   process_event "$event_date" "$event_text"
