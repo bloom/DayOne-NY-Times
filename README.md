@@ -17,7 +17,7 @@ A set of Zsh scripts to fetch New York Times front pages and headlines for speci
 - macOS with Day One app installed
 - Day One CLI: `brew install dayone-cli`
 - jq for JSON processing: `brew install jq`
-- NYT API key (get one from [NYT Developer Portal](https://developer.nytimes.com))
+- NYT API key (get one from [NYT Developer Portal](https://developer.nytimes.com)) Optional to fetch Top Headlines
 - Internet connection
 
 ## Setup
