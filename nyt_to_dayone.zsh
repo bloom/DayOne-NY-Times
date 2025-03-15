@@ -601,7 +601,7 @@ ALL_TAGS=()
 # Build the tag command string using the correct format
 TAG_CMD=""
 if [[ ${#ALL_TAGS[@]} -gt 0 ]]; then
-  TAG_CMD="--tags"
+  TAG_CMD="-t"
   for tag in "${ALL_TAGS[@]}"; do
     TAG_CMD="$TAG_CMD \"$tag\""
   done
