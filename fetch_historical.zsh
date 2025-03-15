@@ -32,12 +32,18 @@ function usage() {
   echo "  --full-summary            Include comprehensive NYT content analysis"
   echo "  --dry-run                 Show what would be done without creating entries"
   echo "  --sleep SEC               Sleep time between API calls in seconds (default: 7)"
+  echo "  --max-retries NUM         Maximum number of retry attempts on failure (default: 3)"
+  echo "  --retry-delay SEC         Seconds to wait between retry attempts (default: 30)"
   echo "  --start-date YYYY-MM-DD   Process events starting from this date"
   echo "  --end-date YYYY-MM-DD     Process events until this date"
   echo "  --event EVENT_NAME        Process only the specific event matching this name"
   echo ""
   echo "The script reads historical-events.json and creates Day One entries"
   echo "for each event on the day AFTER the event date (the 'newspaper date')."
+  echo ""
+  echo "Date formats in historical-events.json:"
+  echo "  1. Full dates: \"January 21, 2017\" (Month Day, Year)"
+  echo "  2. Month-only: \"March 2014\" - will use the 15th as the default day"
   echo ""
   echo "Examples:"
   echo "  $script                                   # Process all events"
@@ -46,6 +52,7 @@ function usage() {
   echo "  $script --start-date 2020-01-01           # Process events from 2020 onwards"
   echo "  $script --event \"Capitol Riots\"          # Process only the Capitol Riots event"
   echo "  $script --sleep 10                        # Use longer delay between API calls"
+  echo "  $script --max-retries 5 --retry-delay 60  # More resilient error handling"
   echo ""
   
   exit 1
@@ -57,8 +64,26 @@ function process_event() {
   local event_text="$2"
   
   # Convert event date to correct format for processing
-  # Example: "January 6, 2021" → "2021-01-06"
-  local formatted_date=$(date -j -f "%B %d, %Y" "$event_date" +%Y-%m-%d 2>/dev/null)
+  local formatted_date=""
+  
+  # Try parsing full date in format "January 6, 2021"
+  formatted_date=$(date -j -f "%B %d, %Y" "$event_date" +%Y-%m-%d 2>/dev/null)
+  
+  # If that fails, try parsing month-year only format "March 2014"
+  if [[ -z "$formatted_date" ]]; then
+    # For month-year format, use the 15th as the default day of the month
+    if [[ "$event_date" =~ ^([A-Za-z]+)[[:space:]]+([0-9]{4})$ ]]; then
+      local month="${BASH_REMATCH[1]}"
+      local year="${BASH_REMATCH[2]}"
+      formatted_date=$(date -j -f "%B %d, %Y" "$month 15, $year" +%Y-%m-%d 2>/dev/null)
+      
+      if [[ -n "$formatted_date" ]]; then
+        echo "Note: Month-only date '$event_date' interpreted as '$month 15, $year'"
+      fi
+    fi
+  fi
+  
+  # If all parsing attempts failed
   if [[ -z "$formatted_date" ]]; then
     echo "Error: Could not parse date: $event_date. Skipping event."
     return 1
@@ -158,7 +183,9 @@ DRY_RUN=false
 START_DATE=""
 END_DATE=""
 SPECIFIC_EVENT=""
-SLEEP_TIME=7   # Default sleep between API calls (seconds)
+SLEEP_TIME=7      # Default sleep between API calls (seconds)
+MAX_RETRIES=3     # Maximum number of retry attempts on failure
+RETRY_DELAY=30    # Seconds to wait between retry attempts
 
 # Process command line arguments
 while (( $# > 0 )); do
@@ -199,6 +226,26 @@ while (( $# > 0 )); do
         shift 2
       else
         echo "Error: --sleep requires a value in seconds"
+        usage
+      fi
+      ;;
+    --max-retries)
+      # Require number of retries argument
+      if (( $# > 1 )); then
+        MAX_RETRIES="$2"
+        shift 2
+      else
+        echo "Error: --max-retries requires a number"
+        usage
+      fi
+      ;;
+    --retry-delay)
+      # Require retry delay argument
+      if (( $# > 1 )); then
+        RETRY_DELAY="$2"
+        shift 2
+      else
+        echo "Error: --retry-delay requires a value in seconds"
         usage
       fi
       ;;
@@ -287,8 +334,9 @@ CREATED=0
 
 echo "\nBEGINNING PROCESSING\n-------------------"
 
-# Display sleep time information
+# Display configuration information
 echo "Sleep time between API calls: $SLEEP_TIME seconds"
+echo "Error retry config: $MAX_RETRIES retries with $RETRY_DELAY seconds delay"
 
 # Process each event in the JSON file
 COUNTER=0
@@ -310,14 +358,41 @@ jq -c '.[]' historical-events.json | while read -r event_json; do
   fi
   ((COUNTER++))
   
-  # Process this event
-  process_event "$event_date" "$event_text"
+  # Process this event with retry mechanism
+  RETRY_COUNT=0
+  PROCESS_SUCCESS=false
+  
+  while [[ $RETRY_COUNT -lt $MAX_RETRIES && "$PROCESS_SUCCESS" = false ]]; do
+    if [[ $RETRY_COUNT -gt 0 ]]; then
+      echo "Retry attempt $RETRY_COUNT of $MAX_RETRIES after waiting $RETRY_DELAY seconds..."
+    fi
+    
+    # Try to process the event
+    process_event "$event_date" "$event_text"
+    RESULT=$?
+    
+    if [[ $RESULT -eq 0 ]]; then
+      # Success!
+      PROCESS_SUCCESS=true
+    else
+      # Failed - increment retry counter
+      ((RETRY_COUNT++))
+      
+      if [[ $RETRY_COUNT -lt $MAX_RETRIES ]]; then
+        echo "ERROR: Processing failed, will retry in $RETRY_DELAY seconds..."
+        sleep $RETRY_DELAY
+      else
+        echo "ERROR: Processing failed after $MAX_RETRIES attempts. Skipping this event."
+      fi
+    fi
+  done
   
   # Track counts based on result
-  if [[ $? -eq 0 ]]; then
+  if [[ "$PROCESS_SUCCESS" = true ]]; then
     ((PROCESSED++))
     [[ "$DRY_RUN" = false ]] && ((CREATED++))
   else
+    echo "WARNING: Skipping event due to persistent errors: $event_text ($event_date)"
     ((SKIPPED++))
   fi
 done
