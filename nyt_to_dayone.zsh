@@ -203,6 +203,16 @@ else
   fi
 fi
 
+# Check if this date is known to have a corrupted PDF
+if is_corrupted_pdf "$DATE" || [[ "$PDF_CORRUPTED" = true ]]; then
+  echo "Note: PDF for $DATE is known to be corrupted. Will skip PDF processing."
+  # Disable all PDF/JPG processing for this date
+  ATTACH_PDF=false
+  ATTACH_JPG=false
+  # Set corrupted flag for handling during command execution
+  PDF_CORRUPTED=true
+fi
+
 # -----------------------------------------------------------------------------
 # Historical Events Processing
 # -----------------------------------------------------------------------------
@@ -272,77 +282,60 @@ cd "$TEMP_DIR" || exit 1
 # Fetch and Process Front Page PDF
 # -----------------------------------------------------------------------------
 
-# First, check if the date is in the corrupted PDFs list or manually marked as corrupted
-if is_corrupted_pdf "$DATE" || [[ "$PDF_CORRUPTED" = true ]]; then
-  echo "Warning: PDF for $DATE is known to be corrupted. Skipping PDF/JPG processing."
-  
-  # Set the corrupted flag (in case it was set by the is_corrupted_pdf function)
-  PDF_CORRUPTED=true
-  
-  # Notify about skipped attachments but continue processing
-  if [[ "$ATTACH_PDF" = true ]]; then
-    echo "PDF attachment was requested but will be skipped."
+# Corrupted PDF handling:
+# 1. We check for corrupted PDFs early in the script (line ~207)
+# 2. If a date has a corrupted PDF, we set PDF_CORRUPTED=true
+# 3. We disable PDF/JPG processing (ATTACH_PDF=false and ATTACH_JPG=false)
+# 4. We add a "Corrupted PDF" tag to the entry
+# 5. When executing the dayone2 command, we'll skip the attachment arguments
+
+# Fetch PDF if needed for either PDF or JPG attachment
+if [[ "$ATTACH_PDF" = true || "$ATTACH_JPG" = true ]]; then
+  echo "Fetching NYT front page for $DATE..."
+  PDF_URL="https://static01.nyt.com/images/$URL_DATE/nytfrontpage/scan.pdf"
+  /usr/bin/curl -s -o frontpage.pdf "$PDF_URL"
+
+  # Verify download was successful
+  if [[ ! -s frontpage.pdf ]]; then
+    echo "Error: Failed to download NYT front page for $DATE"
+    rm -rf "$TEMP_DIR"
+    exit 1
   fi
-  
+
+  # Convert PDF to JPG if needed
   if [[ "$ATTACH_JPG" = true ]]; then
-    echo "JPG attachment was requested but will be skipped."
-  fi
-  
-  # IMPORTANT: Ensure we don't try to process any PDFs
-  ATTACH_PDF=false
-  ATTACH_JPG=false
-  
-  # Skip the PDF processing section entirely
-  echo "Continuing without PDF/JPG processing..."
-else
-  # Fetch PDF if needed for either PDF or JPG attachment
-  if [[ "$ATTACH_PDF" = true || "$ATTACH_JPG" = true ]]; then
-    echo "Fetching NYT front page for $DATE..."
-    PDF_URL="https://static01.nyt.com/images/$URL_DATE/nytfrontpage/scan.pdf"
-    /usr/bin/curl -s -o frontpage.pdf "$PDF_URL"
-
-    # Verify download was successful
-    if [[ ! -s frontpage.pdf ]]; then
-      echo "Error: Failed to download NYT front page for $DATE"
-      rm -rf "$TEMP_DIR"
-      exit 1
-    fi
-
-    # Convert PDF to JPG if needed
-    if [[ "$ATTACH_JPG" = true ]]; then
-      echo "Converting PDF to high-resolution JPG..."
+    echo "Converting PDF to high-resolution JPG..."
+    
+    # Method 1: Use macOS Quick Look for high quality rendering
+    qlmanage -t -s 4500 -o . frontpage.pdf
+    
+    if [[ -f "frontpage.pdf.png" ]]; then
+      # Convert PNG to JPG with high quality
+      echo "Converting PNG to JPG with high quality..."
+      sips -s format jpeg -s formatOptions high frontpage.pdf.png --out frontpage.jpg
+      rm frontpage.pdf.png
       
-      # Method 1: Use macOS Quick Look for high quality rendering
-      qlmanage -t -s 4500 -o . frontpage.pdf
+      # Check the resolution of the output
+      WIDTH=$(sips -g pixelWidth frontpage.jpg | grep pixelWidth | awk '{print $2}')
+      HEIGHT=$(sips -g pixelHeight frontpage.jpg | grep pixelHeight | awk '{print $2}')
+      echo "High resolution image created: ${WIDTH}×${HEIGHT} pixels"
+    else
+      # Fallback Method: Use sips directly with upscaling
+      echo "Using fallback conversion method..."
       
-      if [[ -f "frontpage.pdf.png" ]]; then
-        # Convert PNG to JPG with high quality
-        echo "Converting PNG to JPG with high quality..."
-        sips -s format jpeg -s formatOptions high frontpage.pdf.png --out frontpage.jpg
-        rm frontpage.pdf.png
-        
-        # Check the resolution of the output
-        WIDTH=$(sips -g pixelWidth frontpage.jpg | grep pixelWidth | awk '{print $2}')
-        HEIGHT=$(sips -g pixelHeight frontpage.jpg | grep pixelHeight | awk '{print $2}')
-        echo "High resolution image created: ${WIDTH}×${HEIGHT} pixels"
-      else
-        # Fallback Method: Use sips directly with upscaling
-        echo "Using fallback conversion method..."
-        
-        # First convert to regular JPG
-        sips -s format jpeg frontpage.pdf --out frontpage.jpg
-        
-        # Then scale up by 6x for better quality
-        WIDTH=$(sips -g pixelWidth frontpage.jpg | grep pixelWidth | awk '{print $2}')
-        HEIGHT=$(sips -g pixelHeight frontpage.jpg | grep pixelHeight | awk '{print $2}')
-        WIDTH=${WIDTH%.*}
-        HEIGHT=${HEIGHT%.*}
-        NEW_WIDTH=$((WIDTH * 6))
-        NEW_HEIGHT=$((HEIGHT * 6))
-        
-        echo "Resizing from ${WIDTH}x${HEIGHT} to ${NEW_WIDTH}x${NEW_HEIGHT}..."
-        sips -z $NEW_HEIGHT $NEW_WIDTH frontpage.jpg -s formatOptions high
-      fi
+      # First convert to regular JPG
+      sips -s format jpeg frontpage.pdf --out frontpage.jpg
+      
+      # Then scale up by 6x for better quality
+      WIDTH=$(sips -g pixelWidth frontpage.jpg | grep pixelWidth | awk '{print $2}')
+      HEIGHT=$(sips -g pixelHeight frontpage.jpg | grep pixelHeight | awk '{print $2}')
+      WIDTH=${WIDTH%.*}
+      HEIGHT=${HEIGHT%.*}
+      NEW_WIDTH=$((WIDTH * 6))
+      NEW_HEIGHT=$((HEIGHT * 6))
+      
+      echo "Resizing from ${WIDTH}x${HEIGHT} to ${NEW_WIDTH}x${NEW_HEIGHT}..."
+      sips -z $NEW_HEIGHT $NEW_WIDTH frontpage.jpg -s formatOptions high
     fi
   fi
 fi
@@ -440,20 +433,44 @@ if [[ -s archive.json ]]; then
     
     # Only build full summary if requested
     if [[ "$INCLUDE_FULL_SUMMARY" = true ]]; then
-      # Use a single jq query to extract all the needed data more efficiently
-      SUMMARY_DATA=$(jq -r --arg date "$PUB_DATE_PREFIX" '
-        {
-          total: (.response.docs | map(select(.pub_date | startswith($date))) | length),
-          longest: (.response.docs | map(select(.pub_date | startswith($date))) | sort_by(.word_count) | reverse | .[0] | "\(.word_count) words | \(.headline.main) \(.byline.original // \"\")"),
-          opinions: (.response.docs | map(select(.pub_date | startswith($date)) | select(.news_desk == "OpEd" or .section_name == "Opinion" or .type_of_material == "Op-Ed")) | .[0:3] | map("- \(.headline.main) \(.byline.original // \"\")") | join("\n")),
-          sections: (.response.docs | map(select(.pub_date | startswith($date)) | .section_name) | group_by(.) | map({name: .[0], count: length}) | sort_by(.count) | reverse | .[0:5] | map("- \(.name // \"Uncategorized\"): \(.count) articles") | join("\n"))
-        }' archive.json)
+      # Extract data separately to avoid complex jq syntax issues
+      TOTAL_ARTICLES=$(jq -r --arg date "$PUB_DATE_PREFIX" '.response.docs | map(select(.pub_date | startswith($date))) | length' archive.json)
       
-      # Extract results to variables
-      TOTAL_ARTICLES=$(echo "$SUMMARY_DATA" | jq -r '.total')
-      LONGEST_ARTICLE=$(echo "$SUMMARY_DATA" | jq -r '.longest')
-      TOP_OPINIONS=$(echo "$SUMMARY_DATA" | jq -r '.opinions')
-      SECTION_COUNTS=$(echo "$SUMMARY_DATA" | jq -r '.sections')
+      # Extract longest article details
+      LONGEST_ARTICLE=$(jq -r --arg date "$PUB_DATE_PREFIX" '
+        .response.docs 
+        | map(select(.pub_date | startswith($date))) 
+        | sort_by(.word_count) 
+        | reverse 
+        | .[0] 
+        | "\(.word_count) words | \(.headline.main)"' archive.json)
+      
+      # Extract opinion pieces
+      TOP_OPINIONS=$(jq -r --arg date "$PUB_DATE_PREFIX" '
+        .response.docs 
+        | map(select(.pub_date | startswith($date)) 
+        | select(.news_desk == "OpEd" or .section_name == "Opinion" or .type_of_material == "Op-Ed")) 
+        | .[0:3] 
+        | map("- \(.headline.main)") 
+        | join("\n")' archive.json)
+      
+      # Extract section counts in a simpler way
+      SECTION_DATA=$(jq -r --arg date "$PUB_DATE_PREFIX" '
+        .response.docs 
+        | map(select(.pub_date | startswith($date)) | .section_name) 
+        | group_by(.) 
+        | map({name: .[0], count: length}) 
+        | sort_by(.count) 
+        | reverse 
+        | .[0:5]' archive.json)
+        
+      # Process the section data to create formatted output
+      SECTION_COUNTS=""
+      while read -r section; do
+        name=$(echo "$section" | jq -r '.name // "Uncategorized"')
+        count=$(echo "$section" | jq -r '.count')
+        SECTION_COUNTS="${SECTION_COUNTS}- $name: $count articles\n"
+      done < <(echo "$SECTION_DATA" | jq -c '.[]')
       
       # Extract trending keywords (this is more complex and kept separate)
       TOP_KEYWORDS=$(jq -r --arg date "$PUB_DATE_PREFIX" \
@@ -465,7 +482,6 @@ if [[ -s archive.json ]]; then
       CONTENT_SUMMARY="### NYT Publication Summary
 - Total articles published: $TOTAL_ARTICLES
 - Longest article: $LONGEST_ARTICLE
-- [View full archived issue]($NYT_ARCHIVE_URL)
 
 ### Section Breakdown
 $SECTION_COUNTS
@@ -525,19 +541,13 @@ elif [[ -n "$CUSTOM_HEADLINE" ]]; then
 fi
 
 # Create entry text with appropriate format
-if [[ "$PDF_CORRUPTED" = true ]]; then
-  # Entry with corrupted PDF notice - no image placeholder needed
-  HEADER="#### The New York Times: $HEADER_DATE
-$FIRST_HEADLINE
-
-**(PDF is corrupted)**"
-elif [[ "$ATTACH_JPG" = true || "$ATTACH_PDF" = true ]]; then
+if [[ "$ATTACH_JPG" = true || "$ATTACH_PDF" = true ]]; then
   # Entry with image placeholder and headline above
   HEADER="#### The New York Times: $HEADER_DATE
 $FIRST_HEADLINE
 [{photo}]"
 else
-  # Entry without image
+  # Entry without image - same for corrupted PDFs and no-attachment entries
   HEADER="#### The New York Times: $HEADER_DATE
 $FIRST_HEADLINE"
 fi
@@ -547,14 +557,10 @@ if [[ "$INCLUDE_FULL_SUMMARY" = true && -n "$CONTENT_SUMMARY" ]]; then
   ENTRY_TEXT="${HEADER}
 ${REMAINING_HEADLINES}
 
-${NYT_ARCHIVE_URL}
-
 ${CONTENT_SUMMARY}"
 else
   ENTRY_TEXT="${HEADER}
-${REMAINING_HEADLINES}
-
-${NYT_ARCHIVE_URL}"
+${REMAINING_HEADLINES}"
 fi
 
 # -----------------------------------------------------------------------------
@@ -566,12 +572,10 @@ echo "Creating Day One entry..."
 # Prepare photo attachment arguments
 PHOTO_ARGS=()
 
-# Skip attachments completely if the PDF is corrupted (should already be set, but double-check)
+# If PDF is corrupted, don't use any attachments
 if [[ "$PDF_CORRUPTED" = true ]]; then
-  echo "Skipping attachments due to corrupted PDF..."
-  # These should already be set to false earlier, but ensure it again
-  ATTACH_JPG=false
-  ATTACH_PDF=false
+  echo "Skipping attachments for corrupted PDF date..."
+  # Don't add any attachments
 elif [[ "$ATTACH_JPG" = true && "$ATTACH_PDF" = true ]]; then
   echo "Attaching both JPG and PDF..."
   PHOTO_ARGS=("frontpage.jpg" "frontpage.pdf")
@@ -588,24 +592,12 @@ fi
 # Print journal information
 echo "Using journal: $JOURNAL_NAME"
 
-# Build tag command string for Day One
+# Build tag array for Day One
 ALL_TAGS=()
 
 # Populate tag array - add default tag if enabled and any additional tags
 [[ "$ADD_DEFAULT_TAG" = true ]] && ALL_TAGS+=("$DEFAULT_TAG")
 [[ ${#ADDITIONAL_TAGS[@]} -gt 0 ]] && ALL_TAGS+=("${ADDITIONAL_TAGS[@]}")
-
-# Add a special tag for corrupted PDFs
-[[ "$PDF_CORRUPTED" = true && "$ADD_DEFAULT_TAG" = true ]] && ALL_TAGS+=("Corrupted PDF")
-
-# Build the tag command string using the correct format
-TAG_CMD=""
-if [[ ${#ALL_TAGS[@]} -gt 0 ]]; then
-  TAG_CMD="-t"
-  for tag in "${ALL_TAGS[@]}"; do
-    TAG_CMD="$TAG_CMD \"$tag\""
-  done
-fi
 
 # Show which tags will be applied
 echo "Tags configuration:"
@@ -615,23 +607,17 @@ else
   echo "- Tags to be applied: ${ALL_TAGS[*]}"
 fi
 
-# Run the dayone2 command directly without using function
-# This avoids any issues with read-only variables
-echo "Running dayone2 command directly..."
+# Create a temporary file for the entry text
+TEMP_FILE=$(mktemp)
+echo "$ENTRY_TEXT" > "$TEMP_FILE"
 
-# Create a temp file for the entry content to avoid quoting issues
-TEMP_ENTRY_FILE=$(mktemp)
-
-# Write the entry content to the temp file
-cat > "$TEMP_ENTRY_FILE" << EOT
-$ENTRY_TEXT
-EOT
-
-# Build the arguments for dayone2
+# Prepare common arguments for dayone2 command
 DAYONE_ARGS=()
 
-# Add journal if specified
-DAYONE_ARGS+=("-j" "$JOURNAL_NAME")
+# Add journal parameter if specified
+if [[ -n "$JOURNAL_NAME" ]]; then
+  DAYONE_ARGS+=("-j" "$JOURNAL_NAME")
+fi
 
 # Add date and all-day flag
 DAYONE_ARGS+=("-d" "$DATE" "--all-day")
@@ -643,8 +629,8 @@ if [[ ${#ALL_TAGS[@]} -gt 0 ]]; then
   done
 fi
 
-# Add attachments if any
-if [[ ${#PHOTO_ARGS[@]} -gt 0 ]]; then
+# Add attachments (only if not a corrupted PDF)
+if [[ "$PDF_CORRUPTED" = false && ${#PHOTO_ARGS[@]} -gt 0 ]]; then
   DAYONE_ARGS+=("-a")
   for photo in "${PHOTO_ARGS[@]}"; do
     DAYONE_ARGS+=("$photo")
@@ -652,61 +638,138 @@ if [[ ${#PHOTO_ARGS[@]} -gt 0 ]]; then
   DAYONE_ARGS+=("--")
 fi
 
-# Add "new" command
-DAYONE_ARGS+=("new")
+# Use a more direct and simplified approach for creating entries
+echo "Executing Day One entry creation command..."
 
-# Show the command for debugging
-echo "DEBUG: Running: dayone2 ${DAYONE_ARGS[*]} < $TEMP_ENTRY_FILE"
-
-# Execute the command with journal
-RESULT=$(dayone2 "${DAYONE_ARGS[@]}" < "$TEMP_ENTRY_FILE" 2>&1)
-COMMAND_STATUS=$?
-
-echo "DEBUG: Command exit status = $COMMAND_STATUS"
-echo "DEBUG: Result = $RESULT"
-
-# Check if there was an error with the journal
-if [[ "$RESULT" == *"Invalid value(s) for option -j, --journal"* ]]; then
-  echo "Warning: Journal '$JOURNAL_NAME' not found, saving to default journal instead"
-  
-  # Remove the journal option from the arguments
-  DAYONE_ARGS=("${DAYONE_ARGS[@]:2}")  # Skip the first two arguments (-j "$JOURNAL_NAME")
-  
-  echo "DEBUG: Retrying with: dayone2 ${DAYONE_ARGS[*]} < $TEMP_ENTRY_FILE"
-  RESULT=$(dayone2 "${DAYONE_ARGS[@]}" < "$TEMP_ENTRY_FILE" 2>&1)
+# Create entry with explicit arguments
+if [[ -n "$JOURNAL_NAME" ]]; then
+  # First try with the specified journal
+  if [[ ${#ALL_TAGS[@]} -gt 0 ]]; then
+    # With journal and tags
+    if [[ ${#PHOTO_ARGS[@]} -gt 0 && "$PDF_CORRUPTED" = false ]]; then
+      # With attachments
+      COMMAND_OUTPUT=$(dayone2 new -j "$JOURNAL_NAME" -d "$DATE" --all-day --tags "${ALL_TAGS[@]}" -a "${PHOTO_ARGS[@]}" < "$TEMP_FILE")
+    else
+      # Without attachments (for corrupted PDFs)
+      COMMAND_OUTPUT=$(dayone2 new -j "$JOURNAL_NAME" -d "$DATE" --all-day --tags "${ALL_TAGS[@]}" < "$TEMP_FILE")
+    fi
+    
+    # Print the command output
+    echo "$COMMAND_OUTPUT"
+  else
+    # With journal but no tags
+    if [[ ${#PHOTO_ARGS[@]} -gt 0 && "$PDF_CORRUPTED" = false ]]; then
+      # With attachments
+      COMMAND_OUTPUT=$(dayone2 new -j "$JOURNAL_NAME" -d "$DATE" --all-day -a "${PHOTO_ARGS[@]}" < "$TEMP_FILE")
+    else
+      # Without attachments (for corrupted PDFs)
+      COMMAND_OUTPUT=$(dayone2 new -j "$JOURNAL_NAME" -d "$DATE" --all-day < "$TEMP_FILE")
+    fi
+    
+    # Print the command output
+    echo "$COMMAND_OUTPUT"
+  fi
   COMMAND_STATUS=$?
   
-  echo "DEBUG: Fallback command exit status = $COMMAND_STATUS"
-  echo "DEBUG: Fallback result = $RESULT"
+  # If journal not found, retry without journal
+  if [[ $COMMAND_STATUS -eq 64 ]]; then
+    echo "Warning: Journal '$JOURNAL_NAME' not found, saving to default journal instead"
+    
+    # Retry without journal specification
+    if [[ ${#ALL_TAGS[@]} -gt 0 ]]; then
+      # With tags
+      if [[ ${#PHOTO_ARGS[@]} -gt 0 && "$PDF_CORRUPTED" = false ]]; then
+        # With attachments
+        COMMAND_OUTPUT=$(dayone2 new -d "$DATE" --all-day --tags "${ALL_TAGS[@]}" -a "${PHOTO_ARGS[@]}" < "$TEMP_FILE")
+      else
+        # Without attachments (for corrupted PDFs)
+        COMMAND_OUTPUT=$(dayone2 new -d "$DATE" --all-day --tags "${ALL_TAGS[@]}" < "$TEMP_FILE")
+      fi
+      
+      # Print the command output
+      echo "$COMMAND_OUTPUT"
+    else
+      # No tags
+      if [[ ${#PHOTO_ARGS[@]} -gt 0 && "$PDF_CORRUPTED" = false ]]; then
+        # With attachments
+        COMMAND_OUTPUT=$(dayone2 new -d "$DATE" --all-day -a "${PHOTO_ARGS[@]}" < "$TEMP_FILE")
+      else
+        # Without attachments (for corrupted PDFs)
+        COMMAND_OUTPUT=$(dayone2 new -d "$DATE" --all-day < "$TEMP_FILE")
+      fi
+      
+      # Print the command output
+      echo "$COMMAND_OUTPUT"
+    fi
+    COMMAND_STATUS=$?
+  fi
+else
+  # No journal specified, use default
+  if [[ ${#ALL_TAGS[@]} -gt 0 ]]; then
+    # With tags
+    if [[ ${#PHOTO_ARGS[@]} -gt 0 && "$PDF_CORRUPTED" = false ]]; then
+      # With attachments
+      COMMAND_OUTPUT=$(dayone2 new -d "$DATE" --all-day --tags "${ALL_TAGS[@]}" -a "${PHOTO_ARGS[@]}" < "$TEMP_FILE")
+    else
+      # Without attachments (for corrupted PDFs)
+      COMMAND_OUTPUT=$(dayone2 new -d "$DATE" --all-day --tags "${ALL_TAGS[@]}" < "$TEMP_FILE")
+    fi
+    
+    # Print the command output
+    echo "$COMMAND_OUTPUT"
+  else
+    # No tags
+    if [[ ${#PHOTO_ARGS[@]} -gt 0 && "$PDF_CORRUPTED" = false ]]; then
+      # With attachments
+      COMMAND_OUTPUT=$(dayone2 new -d "$DATE" --all-day -a "${PHOTO_ARGS[@]}" < "$TEMP_FILE")
+    else
+      # Without attachments (for corrupted PDFs)
+      COMMAND_OUTPUT=$(dayone2 new -d "$DATE" --all-day < "$TEMP_FILE")
+    fi
+    
+    # Print the command output
+    echo "$COMMAND_OUTPUT"
+  fi
+  COMMAND_STATUS=$?
 fi
 
 # -----------------------------------------------------------------------------
 # Clean Up and Show Results
 # -----------------------------------------------------------------------------
 
-# Process the result including error checking
+# Handle the result
 if [[ $COMMAND_STATUS -eq 0 ]]; then
-  # Extract UUID from Day One response
-  ENTRY_UUID=$(echo "$RESULT" | grep -o "uuid: [A-Z0-9]\+" | awk '{print $2}')
-  echo "DEBUG: UUID extraction result = '$ENTRY_UUID'"
-  
   # Clean up temporary files
-  rm -f "$TEMP_ENTRY_FILE"
+  rm -f "$TEMP_FILE"
   rm -rf "$TEMP_DIR"
   
-  # Print success message with deep link if available
-  echo "Done! Entry created for $DATE with NYT front page and headlines."
-  if [[ -n "$ENTRY_UUID" ]]; then
-    echo "View in Day One: dayone://view?entryId=$ENTRY_UUID"
+  # Extract UUID from command output 
+  UUID=$(echo "$COMMAND_OUTPUT" | grep -o 'uuid: [A-F0-9]\{32\}' | cut -d' ' -f2)
+  
+  # Print success message
+  if [[ -n "$UUID" ]]; then
+    ENTRY_URL="dayone://view?entryId=$UUID"
+    
+    if [[ "$PDF_CORRUPTED" = true ]]; then
+      echo "Done! Entry created for $DATE with NYT headlines (no PDF attachment)."
+      echo "Entry URL: $ENTRY_URL"
+    else
+      echo "Done! Entry created for $DATE with NYT front page and headlines."
+      echo "Entry URL: $ENTRY_URL"
+    fi
   else
-    echo "Warning: Entry was created but UUID could not be extracted from response."
+    # Fallback if we couldn't extract the UUID
+    if [[ "$PDF_CORRUPTED" = true ]]; then
+      echo "Done! Entry created for $DATE with NYT headlines (no PDF attachment)."
+    else
+      echo "Done! Entry created for $DATE with NYT front page and headlines."
+    fi
   fi
 else
   echo "ERROR: Failed to create Day One entry (exit code $COMMAND_STATUS)"
-  echo "ERROR: Command output was: $RESULT"
   
   # Clean up temporary files
-  rm -f "$TEMP_ENTRY_FILE"
+  rm -f "$TEMP_FILE"
   rm -rf "$TEMP_DIR"
   exit $COMMAND_STATUS
 fi
