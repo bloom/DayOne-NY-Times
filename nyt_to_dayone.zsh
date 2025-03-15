@@ -154,7 +154,23 @@ DAY=$(date -j -f "%Y-%m-%d" "$DATE" +%-d)
 FORMATTED_DATE=$(date -j -f "%Y-%m-%d" "$DATE" +"%A, %B %d, %Y")
 FORMATTED_MONTH=$(date -j -f "%Y-%m-%d" "$DATE" +%m)
 FORMATTED_DAY=$(date -j -f "%Y-%m-%d" "$DATE" +%d)
-HEADER_DATE=$(date -j -f "%Y-%m-%d" "$DATE" +"%B %d")
+
+# Get day of month for ordinal suffix
+DAY_NUM=$(date -j -f "%Y-%m-%d" "$DATE" +%-d)
+# Add ordinal suffix (st, nd, rd, th)
+if [[ $DAY_NUM -eq 11 || $DAY_NUM -eq 12 || $DAY_NUM -eq 13 ]]; then
+  DAY_SUFFIX="th"
+elif [[ $((DAY_NUM % 10)) -eq 1 ]]; then
+  DAY_SUFFIX="st"
+elif [[ $((DAY_NUM % 10)) -eq 2 ]]; then
+  DAY_SUFFIX="nd"
+elif [[ $((DAY_NUM % 10)) -eq 3 ]]; then
+  DAY_SUFFIX="rd"
+else
+  DAY_SUFFIX="th"
+fi
+
+HEADER_DATE=$(date -j -f "%Y-%m-%d" "$DATE" +"%B %-d")${DAY_SUFFIX}
 NYT_ARCHIVE_URL="https://www.nytimes.com/issue/todayspaper/$YEAR/$FORMATTED_MONTH/$FORMATTED_DAY/todays-new-york-times"
 
 # -----------------------------------------------------------------------------
@@ -259,7 +275,7 @@ if [[ -s archive.json ]]; then
       TOP_HEADLINES=$(echo "$TOP_HEADLINES" | sed -E 's/ [B|b]y [^,]+,?//g')
     fi
     
-    # If still no headlines found (e.g., very recent date), add a note
+    # If still no headlines found (e.g., very recent date), attempt a retry
     if [[ -z "$TOP_HEADLINES" ]]; then
       # Check if date is today or yesterday (very recent)
       TODAY=$(date +%Y-%m-%d)
@@ -271,9 +287,55 @@ if [[ -s archive.json ]]; then
 - Front page image is available for viewing"
         FIRST_HEADLINE="Recent Front Page"
       else
-        echo "Note: No headlines found for this date"
-        TOP_HEADLINES="- No headlines found for this date"
-        FIRST_HEADLINE="The New York Times"
+        echo "No headlines found for this date. Waiting 10 seconds and trying again..."
+        
+        # Wait 10 seconds
+        sleep 10
+        
+        # Try fetching from API again
+        echo "Retrying API fetch..."
+        /usr/bin/curl -s -o archive_retry.json "https://api.nytimes.com/svc/archive/v1/$YEAR/$MONTH.json?api-key=$API_KEY"
+        
+        # Process retry response if successful
+        if [[ -s archive_retry.json && -n "$(command -v jq)" ]]; then
+          # Format date prefix for API filtering (YYYY-MM-DDT format)
+          PUB_DATE_PREFIX="$YEAR-$(printf "%02d" $MONTH)-$(printf "%02d" $DAY)T"
+          
+          # Extract top headlines from front page articles on retry
+          RETRY_TOP_HEADLINES=$(jq -r --arg date "$PUB_DATE_PREFIX" \
+            '.response.docs[] | select(.pub_date | startswith($date)) | select(.print_page == "1") | 
+             "- \(.headline.main)"' \
+            archive_retry.json | head -6)
+          
+          # If no front page articles found, try news articles
+          if [[ -z "$RETRY_TOP_HEADLINES" ]]; then
+            RETRY_TOP_HEADLINES=$(jq -r --arg date "$PUB_DATE_PREFIX" \
+              '.response.docs[] | select(.pub_date | startswith($date)) | select(.type_of_material == "News") | 
+               "- \(.headline.main)"' \
+              archive_retry.json | head -6)
+          fi
+          
+          # Remove author information from headlines (anything starting with " By ")
+          if [[ -n "$RETRY_TOP_HEADLINES" ]]; then
+            RETRY_TOP_HEADLINES=$(echo "$RETRY_TOP_HEADLINES" | sed -E 's/ [B|b]y [^,]+,?//g')
+          fi
+          
+          # If we got headlines on the retry, use them
+          if [[ -n "$RETRY_TOP_HEADLINES" ]]; then
+            echo "Headlines found on retry!"
+            TOP_HEADLINES="$RETRY_TOP_HEADLINES"
+          else
+            echo "Note: Still no headlines found after retry"
+            # Leave TOP_HEADLINES empty
+            TOP_HEADLINES=""
+            FIRST_HEADLINE="The New York Times"
+          fi
+        else
+          echo "Retry failed or jq not available."
+          # Leave TOP_HEADLINES empty
+          TOP_HEADLINES=""
+          FIRST_HEADLINE="The New York Times"
+        fi
       fi
     fi
     

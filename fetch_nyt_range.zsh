@@ -132,7 +132,7 @@ for ((day=1; day<=DAYS_IN_RANGE; day++)); do
   CURRENT_SECONDS=$((CURRENT_SECONDS + 86400))
   
   # Add delay to avoid API rate limiting
-  sleep 2
+  sleep 7
 done
 
 # -----------------------------------------------------------------------------
