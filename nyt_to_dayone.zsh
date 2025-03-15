@@ -64,6 +64,7 @@ DEFAULT_TAG="The New York Times"  # Default tag (can be disabled)
 ADD_DEFAULT_TAG=true    # Whether to add the default tag
 ADDITIONAL_TAGS=()      # Additional tags to add
 CUSTOM_HEADLINE=""      # Custom headline to use instead of NYT first headline
+PDF_CORRUPTED=false     # Whether the PDF is known to be corrupted
 
 # List of dates with known corrupted PDFs (YYYY-MM-DD format)
 CORRUPTED_PDFS=(
@@ -271,15 +272,12 @@ cd "$TEMP_DIR" || exit 1
 # Fetch and Process Front Page PDF
 # -----------------------------------------------------------------------------
 
-# Set a flag for whether we have PDF/JPG attachments
-PDF_CORRUPTED=false
-
-# Check if the date is in the corrupted PDFs list
+# Check if the current date is in the corrupted PDFs list
 if is_corrupted_pdf "$DATE"; then
   echo "Warning: PDF for $DATE is known to be corrupted. Skipping PDF/JPG processing."
   PDF_CORRUPTED=true
   
-  # Create empty attachments to handle in template
+  # Notify about skipped attachments but continue processing
   if [[ "$ATTACH_PDF" = true ]]; then
     echo "PDF attachment was requested but will be skipped."
   fi
@@ -287,6 +285,10 @@ if is_corrupted_pdf "$DATE"; then
   if [[ "$ATTACH_JPG" = true ]]; then
     echo "JPG attachment was requested but will be skipped."
   fi
+  
+  # Ensure we continue with the rest of the process
+  ATTACH_PDF=false
+  ATTACH_JPG=false
 else
   # Fetch PDF if needed for either PDF or JPG attachment
   if [[ "$ATTACH_PDF" = true || "$ATTACH_JPG" = true ]]; then
@@ -519,7 +521,7 @@ fi
 
 # Create entry text with appropriate format
 if [[ "$PDF_CORRUPTED" = true ]]; then
-  # Entry with corrupted PDF notice
+  # Entry with corrupted PDF notice - no image placeholder needed
   HEADER="#### The New York Times: $HEADER_DATE
 $FIRST_HEADLINE
 
@@ -586,6 +588,9 @@ ALL_TAGS=()
 # Populate tag array - add default tag if enabled and any additional tags
 [[ "$ADD_DEFAULT_TAG" = true ]] && ALL_TAGS+=("$DEFAULT_TAG")
 [[ ${#ADDITIONAL_TAGS[@]} -gt 0 ]] && ALL_TAGS+=("${ADDITIONAL_TAGS[@]}")
+
+# Add a special tag for corrupted PDFs
+[[ "$PDF_CORRUPTED" = true && "$ADD_DEFAULT_TAG" = true ]] && ALL_TAGS+=("Corrupted PDF")
 
 # Build the tag command string using the correct format
 TAG_CMD=""

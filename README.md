@@ -43,13 +43,13 @@ A set of Zsh scripts to fetch New York Times front pages and headlines for speci
 
 ```zsh
 # Download all front pages for 2023
-./download_nyt_year.zsh 2023
+./download_nyt_year_pdf.zsh 2023
 
 # Download to a specific directory
-./download_nyt_year.zsh 2023 --directory ~/Documents/NYT_Archive
+./download_nyt_year_pdf.zsh 2023 --directory ~/Documents/NYT_Archive
 
 # Use longer pause between downloads to avoid rate limiting
-./download_nyt_year.zsh 2023 --sleep 5
+./download_nyt_year_pdf.zsh 2023 --sleep 5
 ```
 
 ### Single Day Entry
@@ -78,6 +78,9 @@ A set of Zsh scripts to fetch New York Times front pages and headlines for speci
 
 # Add additional tags
 ./nyt_to_dayone.zsh --tag "Election" --tag "Politics" 2020-11-04
+
+# Handle corrupted PDF
+./nyt_to_dayone.zsh --bad-pdf 2018-01-10
 
 # Show help
 ./nyt_to_dayone.zsh --help
@@ -123,6 +126,7 @@ A set of Zsh scripts to fetch New York Times front pages and headlines for speci
 - **Historical Events**: Reads from a JSON file to correlate newspaper dates with significant events
 - **Journal Selection**: Allows specifying any Day One journal with fallback to default journal if not found
 - **Tag Management**: Automatically adds appropriate tags based on entry type
+- **Error Handling**: Gracefully handles corrupted PDFs with a customizable skip list
 - **Deep Links**: Provides `dayone://view?entryId=UUID` links for direct entry access
 
 ## Historical Events
@@ -168,10 +172,29 @@ The scripts can automatically integrate historical events with newspaper front p
 ./fetch_historical.zsh --help
 ```
 
+## Handling Corrupted PDFs
+
+Some NYT front page PDFs may be corrupted or cause processing errors. The script includes a mechanism to handle these gracefully:
+
+1. Known corrupted PDFs are listed in the script and automatically skipped
+2. Entries for dates with corrupted PDFs will show "(PDF is corrupted)" instead of an image
+3. These entries receive a special "Corrupted PDF" tag for easy filtering
+
+### Using the Bad PDF Option
+
+```zsh
+# Mark a date as having a corrupted PDF
+./nyt_to_dayone.zsh --bad-pdf 2018-01-10
+
+# Add a date to the permanent corrupted PDFs list
+# Edit nyt_to_dayone.zsh and add to the CORRUPTED_PDFS array
+```
+
 ## Notes
 
 - Regular entries are created with "The New York Times" tag
 - Historical event entries receive both "The New York Times" and "Historical Event" tags
+- Corrupted PDF entries receive both "The New York Times" and "Corrupted PDF" tags
 - Images are placed in the entry using the Day One `[{photo}]` placeholder
 - Scripts include delays to avoid API rate limiting
 - These scripts use native Zsh features and are optimized for macOS
