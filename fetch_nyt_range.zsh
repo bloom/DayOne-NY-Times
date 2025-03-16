@@ -18,11 +18,11 @@ function usage() {
   local script=$(basename "$0")
   
   # Display help information  
-  echo "Usage: $script START_DATE END_DATE [options]"
+  echo "Usage: $script DATE_SPEC [END_DATE] [options]"
   echo ""
   echo "Arguments:"
-  echo "  START_DATE: First date to fetch (YYYY-MM-DD format)"
-  echo "  END_DATE:   Last date to fetch (YYYY-MM-DD format)"
+  echo "  DATE_SPEC:  Date to fetch in YYYY-MM-DD format or YYYY-MM format (for entire month)"
+  echo "  END_DATE:   Optional last date for a range (YYYY-MM-DD format)"
   echo ""
   echo "Options:"
   echo "  --sleep SEC      Sleep time between API calls in seconds (default: 7)"
@@ -33,11 +33,12 @@ function usage() {
   echo "  --journal NAME   Specify Day One journal name (default: New York Times)"
   echo ""
   echo "Examples:"
-  echo "  $script 2025-01-01 2025-01-31                  # Fetch all of January 2025"
+  echo "  $script 2025-01                                # Fetch all of January 2025"
+  echo "  $script 2025-01-01 2025-01-31                  # Fetch a custom date range" 
   echo "  $script 2025-01-15 2025-02-15                  # Fetch a custom date range"
-  echo "  $script 2025-01-01 2025-01-31 --pdf            # Include PDF attachments"
+  echo "  $script 2025-01 --pdf                          # Include PDF attachments"
   echo "  $script 2025-01-01 2025-01-31 --sleep 3        # Use shorter delay between API calls"
-  echo "  $script 2025-01-01 2025-01-31 --journal \"History\"  # Use specific journal"
+  echo "  $script 2025-01 --journal \"History\"            # Use specific journal"
   
   exit 1
 }
@@ -50,25 +51,65 @@ function usage() {
 SLEEP_TIME=7   # Default sleep between API calls
 
 # Check if required arguments are provided
-if [[ $# -lt 2 ]]; then
-  echo "Error: Missing required date arguments"
+if [[ $# -lt 1 ]]; then
+  echo "Error: Missing required date argument"
   usage
 fi
 
-# Store and validate date arguments
-START_DATE="$1"
-END_DATE="$2"
-shift 2  # Remove dates from args
+# Store date argument
+DATE_SPEC="$1"
+shift
 
-# Validate start date format
-if ! [[ "$START_DATE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
-  echo "Error: START_DATE must be in YYYY-MM-DD format"
-  usage
-fi
-
-# Validate end date format
-if ! [[ "$END_DATE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
-  echo "Error: END_DATE must be in YYYY-MM-DD format"
+# Handle different date format cases
+if [[ "$DATE_SPEC" =~ ^[0-9]{4}-[0-9]{2}$ ]]; then
+  # Year-Month format: process entire month
+  # Extract year and month using substring
+  YEAR=${DATE_SPEC:0:4}
+  MONTH=${DATE_SPEC:5:2}
+  
+  # Calculate first day of month
+  START_DATE="$YEAR-$MONTH-01"
+  
+  # Calculate last day of month based on which month it is
+  case "$MONTH" in
+    "01"|"03"|"05"|"07"|"08"|"10"|"12")
+      # 31 days
+      END_DATE="$YEAR-$MONTH-31"
+      ;;
+    "04"|"06"|"09"|"11")
+      # 30 days
+      END_DATE="$YEAR-$MONTH-30"
+      ;;
+    "02")
+      # February - check for leap year
+      # Leap year if divisible by 4, except for century years not divisible by 400
+      if [[ $(( YEAR % 4 )) -eq 0 && ( $(( YEAR % 100 )) -ne 0 || $(( YEAR % 400 )) -eq 0 ) ]]; then
+        # Leap year - 29 days
+        END_DATE="$YEAR-$MONTH-29"
+      else
+        # Not a leap year - 28 days
+        END_DATE="$YEAR-$MONTH-28"
+      fi
+      ;;
+  esac
+  
+  echo "Processing entire month: $YEAR-$MONTH (from $START_DATE to $END_DATE)"
+  
+elif [[ "$DATE_SPEC" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+  # Full date format: expected to be a range if second argument is present
+  START_DATE="$DATE_SPEC"
+  
+  # Check for end date argument
+  if [[ $# -gt 0 && "$1" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+    END_DATE="$1"
+    shift
+  else
+    # No end date provided, use the start date as the end date (single day)
+    END_DATE="$START_DATE"
+  fi
+  
+else
+  echo "Error: DATE_SPEC must be in YYYY-MM or YYYY-MM-DD format"
   usage
 fi
 
