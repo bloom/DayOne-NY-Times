@@ -2,6 +2,8 @@
 
 A set of Zsh scripts to fetch New York Times front pages and headlines for specific dates or date ranges, converting them to Day One journal entries with attached images and content analysis.
 
+![2025-03-15-Day One-Historical Events](https://github.com/user-attachments/assets/2b3556e0-b991-4c5a-9a49-fa20c6701163)
+
 ## Features
 
 - Fetches front page PDFs and top headlines for any date
